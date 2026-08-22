@@ -1,75 +1,291 @@
-self.addEventListener("install", () => {
-  self.skipWaiting();
-});
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FAWAZ AI BOT</title>
 
-self.addEventListener("activate", event => {
-  event.waitUntil(self.clients.claim());
-});
+  <style>
+    * {
+      box-sizing: border-box;
+      font-family: Arial, sans-serif;
+    }
 
-self.addEventListener("push", event => {
-  let data = {};
+    body {
+      margin: 0;
+      background: #080808;
+      color: white;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+
+    .app {
+      max-width: 420px;
+      margin: auto;
+    }
+
+    .title {
+      text-align: center;
+      letter-spacing: 3px;
+      font-size: 17px;
+      margin: 25px 0;
+    }
+
+    .card {
+      background: #141414;
+      border: 1px solid #292929;
+      border-radius: 18px;
+      padding: 24px;
+      margin-bottom: 15px;
+    }
+
+    .pair {
+      text-align: center;
+      font-size: 30px;
+      font-weight: bold;
+      direction: ltr;
+    }
+
+    .sub {
+      text-align: center;
+      color: #888;
+      margin-top: 8px;
+    }
+
+    h3 {
+      margin-top: 0;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 15px 0;
+      border-bottom: 1px solid #292929;
+      direction: ltr;
+      font-size: 17px;
+    }
+
+    button {
+      width: 100%;
+      padding: 16px;
+      border: 0;
+      border-radius: 12px;
+      margin-top: 16px;
+      background: #b6ff32;
+      color: #080808;
+      font-size: 16px;
+      font-weight: bold;
+    }
+
+    .status {
+      text-align: center;
+      margin-top: 15px;
+      color: #4cff9a;
+    }
+
+    .footer {
+      text-align: center;
+      color: #555;
+      margin-top: 20px;
+      font-size: 11px;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="app">
+
+  <div class="title">
+    FAWAZ AI BOT
+  </div>
+
+  <div class="card">
+    <div class="pair">
+      SOL / USDC
+    </div>
+
+    <div class="sub">
+      OKX Trading Bot
+    </div>
+  </div>
+
+  <div class="card">
+
+    <h3>رصيد OKX</h3>
+
+    <div class="row">
+      <b>SOL</b>
+      <span id="sol">...</span>
+    </div>
+
+    <div class="row">
+      <b>USDC</b>
+      <span id="usdc">...</span>
+    </div>
+
+    <button onclick="loadBalance()">
+      تحديث الرصيد
+    </button>
+
+    <div class="status" id="status">
+      جاري الاتصال...
+    </div>
+
+  </div>
+
+  <div class="card">
+
+    <h3>وكلاء الذكاء الاصطناعي 🤖</h3>
+
+    <div class="row">
+      <b>القرار</b>
+      <span id="decision">...</span>
+    </div>
+
+    <div class="row">
+      <b>الثقة</b>
+      <span id="confidence">...</span>
+    </div>
+
+    <button onclick="loadDecision()">
+      تحديث تحليل الوكلاء
+    </button>
+
+  </div>
+
+  <div class="card">
+
+    <h3>تنبيهات الصفقات 🔔</h3>
+
+    <button onclick="enableNotifications()">
+      تفعيل الإشعارات
+    </button>
+
+    <div class="status" id="notifyStatus">
+      الإشعارات غير مفعلة
+    </div>
+
+  </div>
+
+  <div class="footer">
+    FAWAZ AI BOT • OKX API
+  </div>
+
+</div>
+
+<script>
+
+async function loadBalance() {
+  try {
+
+    const response =
+      await fetch("/api/api/balance");
+
+    const data =
+      await response.json();
+
+    if (data.status === "ok") {
+
+      document.getElementById("sol").innerText =
+        data.SOL + " SOL";
+
+      document.getElementById("usdc").innerText =
+        data.USDC + " USDC";
+
+      document.getElementById("status").innerText =
+        "● OKX متصل بنجاح";
+
+    }
+
+  } catch (error) {
+
+    document.getElementById("status").innerText =
+      "خطأ في الاتصال";
+
+  }
+}
+
+
+async function loadDecision() {
 
   try {
-    data = event.data ? event.data.json() : {};
-  } catch {
-    data = {};
+
+    const response =
+      await fetch("/api/decision-agent");
+
+    const data =
+      await response.json();
+
+    if (data.status === "ok") {
+
+      document.getElementById("decision").innerText =
+        data.decision;
+
+      document.getElementById("confidence").innerText =
+        data.confidence + "%";
+
+    }
+
+  } catch (error) {
+
+    document.getElementById("decision").innerText =
+      "ERROR";
+
   }
 
-  const title = data.title || "FAWAZ AI BOT";
+}
 
-  const options = {
-    body: data.body || "فرصة تداول جديدة",
-    icon: "/icon-192.png",
-    badge: "/icon-192.png",
-    data: {
-      signalId: data.signalId || "",
-      url: data.url || "/"
-    },
-    actions: [
-      {
-        action: "approve",
-        title: "✅ قبول"
-      },
-      {
-        action: "reject",
-        title: "❌ رفض"
-      }
-    ]
-  };
 
-  event.waitUntil(
-    self.registration.showNotification(title, options)
-  );
-});
+async function enableNotifications() {
 
-self.addEventListener("notificationclick", event => {
-  event.notification.close();
+  const status =
+    document.getElementById("notifyStatus");
 
-  const signalId = event.notification.data?.signalId || "";
+  try {
 
-  if (
-    event.action === "approve" ||
-    event.action === "reject"
-  ) {
-    event.waitUntil(
-      fetch("/api/approve", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          signalId,
-          action: event.action
-        })
-      })
+    if (!("serviceWorker" in navigator)) {
+
+      status.innerText =
+        "الجهاز لا يدعم الإشعارات";
+
+      return;
+    }
+
+    await navigator.serviceWorker.register(
+      "/service-worker.js"
     );
 
-    return;
+    const permission =
+      await Notification.requestPermission();
+
+    if (permission === "granted") {
+
+      status.innerText =
+        "✅ تم السماح بالإشعارات";
+
+    } else {
+
+      status.innerText =
+        "❌ لم يتم السماح بالإشعارات";
+
+    }
+
+  } catch (error) {
+
+    status.innerText =
+      "❌ خطأ في تفعيل الإشعارات";
+
   }
 
-  event.waitUntil(
-    clients.openWindow(
-      event.notification.data?.url || "/"
-    )
-  );
-});
+}
+
+
+loadBalance();
+loadDecision();
+
+</script>
+
+</body>
+</html>
