@@ -76,12 +76,31 @@
       color: #080808;
       font-size: 16px;
       font-weight: bold;
+      cursor: pointer;
+    }
+
+    button.stop {
+      background: #ff4d4d;
+      color: white;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
     }
 
     .status {
       text-align: center;
       margin-top: 15px;
       color: #4cff9a;
+    }
+
+    .warning {
+      text-align: center;
+      margin-top: 12px;
+      color: #ffca4b;
+      font-size: 13px;
+      line-height: 1.6;
     }
 
     .footer {
@@ -111,6 +130,9 @@
     </div>
   </div>
 
+
+  <!-- OKX BALANCE -->
+
   <div class="card">
 
     <h3>رصيد OKX</h3>
@@ -135,6 +157,9 @@
 
   </div>
 
+
+  <!-- AI AGENTS -->
+
   <div class="card">
 
     <h3>وكلاء الذكاء الاصطناعي 🤖</h3>
@@ -155,6 +180,45 @@
 
   </div>
 
+
+  <!-- AUTOMATIC TRADING -->
+
+  <div class="card">
+
+    <h3>التداول الآلي ⚡</h3>
+
+    <div class="row">
+      <b>الحالة</b>
+      <span id="tradingState">جاري التحقق...</span>
+    </div>
+
+    <div class="row">
+      <b>حماية المخاطر</b>
+      <span id="riskState">مفعلة</span>
+    </div>
+
+    <button
+      id="tradingButton"
+      onclick="toggleTrading()"
+      disabled
+    >
+      جاري التحقق...
+    </button>
+
+    <div class="status" id="tradingStatus">
+      يتم التحقق من نظام التداول
+    </div>
+
+    <div class="warning">
+      لا يتم اعتبار التداول مفعلاً إلا بعد تأكيد الخادم.
+      وكيل المخاطر يجب أن يوافق قبل أي تنفيذ.
+    </div>
+
+  </div>
+
+
+  <!-- NOTIFICATIONS -->
+
   <div class="card">
 
     <h3>تنبيهات الصفقات 🔔</h3>
@@ -169,15 +233,25 @@
 
   </div>
 
+
   <div class="footer">
     FAWAZ AI BOT • OKX API
   </div>
 
 </div>
 
+
 <script>
 
+let tradingEnabled = false;
+
+
+/* =========================
+   OKX BALANCE
+========================= */
+
 async function loadBalance() {
+
   try {
 
     const response =
@@ -197,6 +271,11 @@ async function loadBalance() {
       document.getElementById("status").innerText =
         "● OKX متصل بنجاح";
 
+    } else {
+
+      document.getElementById("status").innerText =
+        "تعذر قراءة الرصيد";
+
     }
 
   } catch (error) {
@@ -207,6 +286,10 @@ async function loadBalance() {
   }
 }
 
+
+/* =========================
+   AI DECISION
+========================= */
 
 async function loadDecision() {
 
@@ -226,6 +309,11 @@ async function loadDecision() {
       document.getElementById("confidence").innerText =
         data.confidence + "%";
 
+    } else {
+
+      document.getElementById("decision").innerText =
+        "WAIT";
+
     }
 
   } catch (error) {
@@ -234,9 +322,165 @@ async function loadDecision() {
       "ERROR";
 
   }
-
 }
 
+
+/* =========================
+   TRADING CONTROL
+========================= */
+
+async function loadTradingState() {
+
+  const button =
+    document.getElementById("tradingButton");
+
+  const state =
+    document.getElementById("tradingState");
+
+  const status =
+    document.getElementById("tradingStatus");
+
+  try {
+
+    const response =
+      await fetch("/api/trading-control");
+
+    if (!response.ok) {
+      throw new Error("Trading API not ready");
+    }
+
+    const data =
+      await response.json();
+
+    tradingEnabled =
+      data.enabled === true;
+
+    updateTradingUI();
+
+    button.disabled = false;
+
+  } catch (error) {
+
+    tradingEnabled = false;
+
+    state.innerText =
+      "غير مفعّل";
+
+    status.innerText =
+      "⚠️ نظام التحكم بالتداول غير مربوط بعد";
+
+    button.innerText =
+      "تشغيل التداول الآلي";
+
+    button.classList.remove("stop");
+
+    button.disabled = true;
+
+  }
+}
+
+
+async function toggleTrading() {
+
+  const button =
+    document.getElementById("tradingButton");
+
+  const status =
+    document.getElementById("tradingStatus");
+
+  button.disabled = true;
+
+  status.innerText =
+    "جاري إرسال الطلب...";
+
+  try {
+
+    const response =
+      await fetch("/api/trading-control", {
+
+        method: "POST",
+
+        headers: {
+          "Content-Type": "application/json"
+        },
+
+        body: JSON.stringify({
+          enabled: !tradingEnabled
+        })
+
+      });
+
+    if (!response.ok) {
+      throw new Error("Request failed");
+    }
+
+    const data =
+      await response.json();
+
+    if (data.status !== "ok") {
+      throw new Error("Trading control rejected");
+    }
+
+    tradingEnabled =
+      data.enabled === true;
+
+    updateTradingUI();
+
+  } catch (error) {
+
+    status.innerText =
+      "❌ لم يتم تغيير حالة التداول";
+
+  }
+
+  button.disabled = false;
+}
+
+
+function updateTradingUI() {
+
+  const button =
+    document.getElementById("tradingButton");
+
+  const state =
+    document.getElementById("tradingState");
+
+  const status =
+    document.getElementById("tradingStatus");
+
+  if (tradingEnabled) {
+
+    state.innerText =
+      "يعمل";
+
+    status.innerText =
+      "● التداول الآلي مفعّل";
+
+    button.innerText =
+      "إيقاف التداول الآلي";
+
+    button.classList.add("stop");
+
+  } else {
+
+    state.innerText =
+      "متوقف";
+
+    status.innerText =
+      "● التداول الآلي متوقف";
+
+    button.innerText =
+      "تشغيل التداول الآلي";
+
+    button.classList.remove("stop");
+
+  }
+}
+
+
+/* =========================
+   NOTIFICATIONS
+========================= */
 
 async function enableNotifications() {
 
@@ -278,12 +522,16 @@ async function enableNotifications() {
       "❌ خطأ في تفعيل الإشعارات";
 
   }
-
 }
 
 
+/* =========================
+   INITIAL LOAD
+========================= */
+
 loadBalance();
 loadDecision();
+loadTradingState();
 
 </script>
 
