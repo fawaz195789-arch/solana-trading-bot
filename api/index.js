@@ -1,32 +1,10 @@
-import crypto from "crypto";
-
-export default async function handler(req, res) {
-  try {
-    const apiKey = process.env.OKX_API_KEY;
-    const secretKey = process.env.OKX_SECRET_KEY;
-    const passphrase = process.env.OKX_PASSPHRASE;
-
-    if (!apiKey || !secretKey || !passphrase) {
-      return res.status(500).json({
-        status: "error",
-        message: "Missing OKX environment variables"
-      });
-    }
-
-    const timestamp = new Date().toISOString();
-    const method = "GET";
-    const requestPath = "/api/v5/account/balance";
-    const body = "";
-
-    const prehash = timestamp + method + requestPath + body;
-
-    const signature = crypto
-      .createHmac("sha256", secretKey)
-      .update(prehash)
-      .digest("base64");
-
-    const response = await fetch(
-      "https://www.okx.com" + requestPath,
+export default function handler(req, res) {
+  res.status(200).json({
+    OKX_API_KEY: !!process.env.OKX_API_KEY,
+    OKX_SECRET_KEY: !!process.env.OKX_SECRET_KEY,
+    OKX_PASSPHRASE: !!process.env.OKX_PASSPHRASE
+  });
+}
       {
         method,
         headers: {
