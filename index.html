@@ -1,191 +1,75 @@
-<!DOCTYPE html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>FAWAZ AI BOT</title>
+self.addEventListener("install", () => {
+  self.skipWaiting();
+});
 
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: Arial, sans-serif;
-    }
+self.addEventListener("activate", event => {
+  event.waitUntil(self.clients.claim());
+});
 
-    body {
-      background: #080808;
-      color: white;
-      min-height: 100vh;
-      display: flex;
-      justify-content: center;
-      padding: 40px 20px;
-    }
+self.addEventListener("push", event => {
+  let data = {};
 
-    .app {
-      width: 100%;
-      max-width: 420px;
-    }
-
-    .title {
-      text-align: center;
-      margin-bottom: 25px;
-      font-size: 16px;
-      letter-spacing: 3px;
-    }
-
-    .card {
-      background: #141414;
-      border: 1px solid #292929;
-      border-radius: 18px;
-      padding: 24px;
-      margin-bottom: 15px;
-    }
-
-    .pair {
-      text-align: center;
-      font-size: 30px;
-      font-weight: bold;
-      direction: ltr;
-    }
-
-    .sub {
-      color: #888;
-      text-align: center;
-      margin-top: 8px;
-      font-size: 13px;
-    }
-
-    .balance-title {
-      margin-bottom: 12px;
-      font-size: 17px;
-      font-weight: bold;
-    }
-
-    .balance-row {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 15px 0;
-      border-bottom: 1px solid #292929;
-      direction: ltr;
-    }
-
-    .balance-row:last-child {
-      border-bottom: none;
-    }
-
-    .coin {
-      font-weight: bold;
-      font-size: 18px;
-    }
-
-    .amount {
-      font-size: 17px;
-    }
-
-    .btn {
-      width: 100%;
-      border: 0;
-      border-radius: 12px;
-      padding: 16px;
-      margin-top: 18px;
-      background: #b6ff32;
-      color: #080808;
-      font-size: 16px;
-      font-weight: bold;
-    }
-
-    .status {
-      text-align: center;
-      margin-top: 15px;
-      color: #aaa;
-    }
-
-    .ok {
-      color: #4cff9a;
-    }
-
-    .error {
-      color: #ff6666;
-    }
-
-    .footer {
-      text-align: center;
-      color: #555;
-      font-size: 11px;
-      margin-top: 20px;
-    }
-  </style>
-</head>
-
-<body>
-
-<div class="app">
-
-  <div class="title">FAWAZ AI BOT</div>
-
-  <div class="card">
-    <div class="pair">SOL / USDC</div>
-    <div class="sub">OKX Trading Bot</div>
-  </div>
-
-  <div class="card">
-    <div class="balance-title">رصيد OKX</div>
-
-    <div class="balance-row">
-      <span class="coin">SOL</span>
-      <span class="amount" id="solBalance">...</span>
-    </div>
-
-    <div class="balance-row">
-      <span class="coin">USDC</span>
-      <span class="amount" id="usdcBalance">...</span>
-    </div>
-
-    <button class="btn" onclick="loadBalance()">
-      تحديث الرصيد
-    </button>
-
-    <div class="status" id="status">جاري الاتصال...</div>
-  </div>
-
-  <div class="footer">
-    FAWAZ AI BOT • OKX API
-  </div>
-
-</div>
-
-<script>
-  async function loadBalance() {
-    const status = document.getElementById("status");
-
-    status.className = "status";
-    status.innerText = "جاري الاتصال بـ OKX...";
-
-    try {
-      const response = await fetch("/api/api/balance");
-      const data = await response.json();
-
-      if (data.status === "ok") {
-        document.getElementById("solBalance").innerText = data.SOL + " SOL";
-        document.getElementById("usdcBalance").innerText = data.USDC + " USDC";
-
-        status.className = "status ok";
-        status.innerText = "● OKX متصل بنجاح";
-      } else {
-        status.className = "status error";
-        status.innerText = data.message || "خطأ في الاتصال";
-      }
-
-    } catch (error) {
-      status.className = "status error";
-      status.innerText = "تعذر الاتصال بالسيرفر";
-    }
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = {};
   }
 
-  loadBalance();
-</script>
+  const title = data.title || "FAWAZ AI BOT";
 
-</body>
-</html>
+  const options = {
+    body: data.body || "فرصة تداول جديدة",
+    icon: "/icon-192.png",
+    badge: "/icon-192.png",
+    data: {
+      signalId: data.signalId || "",
+      url: data.url || "/"
+    },
+    actions: [
+      {
+        action: "approve",
+        title: "✅ قبول"
+      },
+      {
+        action: "reject",
+        title: "❌ رفض"
+      }
+    ]
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(title, options)
+  );
+});
+
+self.addEventListener("notificationclick", event => {
+  event.notification.close();
+
+  const signalId = event.notification.data?.signalId || "";
+
+  if (
+    event.action === "approve" ||
+    event.action === "reject"
+  ) {
+    event.waitUntil(
+      fetch("/api/approve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          signalId,
+          action: event.action
+        })
+      })
+    );
+
+    return;
+  }
+
+  event.waitUntil(
+    clients.openWindow(
+      event.notification.data?.url || "/"
+    )
+  );
+});
