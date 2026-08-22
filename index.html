@@ -67,95 +67,16 @@
       color: #080808;
       font-size: 16px;
       font-weight: bold;
-      cursor: pointer;
     }
 
-    .status {
-      text-align: center;
-      font-size: 15px;
-      line-height: 1.8;
+    .balance-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 13px 0;
+      border-bottom: 1px solid #262626;
+      direction: ltr;
     }
 
-    .dot {
-      display: inline-block;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #777;
-      margin-left: 7px;
-    }
-
-    .connected {
-      background: #4cff9a;
-    }
-
-    .error {
-      background: #ff4c4c;
-    }
-
-    .footer {
-      color: #555;
-      text-align: center;
-      font-size: 11px;
-      margin-top: 20px;
-    }
-  </style>
-</head>
-
-<body>
-
-  <div class="app">
-
-    <div class="title">FAWAZ AI BOT</div>
-
-    <div class="card">
-      <div class="pair">SOL / USDC</div>
-      <div class="sub">OKX Trading Bot</div>
-
-      <button class="btn" onclick="checkOKX()">
-        اختبار اتصال OKX
-      </button>
-    </div>
-
-    <div class="card">
-      <div class="status" id="status">
-        <span class="dot"></span>
-        جاهز للاختبار
-      </div>
-    </div>
-
-    <div class="footer">
-      FAWAZ AI BOT • OKX API
-    </div>
-
-  </div>
-
-  <script>
-    async function checkOKX() {
-      const status = document.getElementById("status");
-
-      status.innerHTML =
-        '<span class="dot"></span> جاري الاتصال بـ OKX...';
-
-      try {
-        const response = await fetch("/api/api/okx-test");
-        const data = await response.json();
-
-        if (data.status === "ok") {
-          status.innerHTML =
-            '<span class="dot connected"></span> OKX متصل بنجاح ✅';
-        } else {
-          status.innerHTML =
-            '<span class="dot error"></span> خطأ: ' +
-            (data.message || "فشل الاتصال");
-        }
-
-      } catch (error) {
-        status.innerHTML =
-          '<span class="dot error"></span> تعذر الاتصال بالسيرفر';
-      }
-    }
-  </script>
-
-</body>
-</html>
+    .balance-row:last-child {
+      border
