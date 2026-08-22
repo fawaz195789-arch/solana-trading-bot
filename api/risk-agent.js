@@ -4,7 +4,7 @@ export default async function handler(req, res) {
     const protocol = host.includes("localhost") ? "http" : "https";
 
     const response = await fetch(
-      `${protocol}://${host}/api/api/market-agent`
+      `${protocol}://${host}/api/market-agent`
     );
 
     const data = await response.json();
@@ -31,6 +31,25 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       status: "ok",
+      pair: "SOL-USDC",
+      marketDecision: signal.action,
+      confidence: signal.confidence,
+      riskDecision: riskDecision,
+      amount: riskDecision === "ALLOW" ? 5 : 0,
+      reason: reason,
+      finalStatus:
+        riskDecision === "ALLOW"
+          ? "waiting_approval"
+          : "no_trade"
+    });
+
+  } catch (error) {
+    return res.status(500).json({
+      status: "error",
+      message: error.message
+    });
+  }
+}
       pair: "SOL-USDC",
       marketDecision: signal.action,
       confidence: signal.confidence,
