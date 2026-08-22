@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAWAZ AI BOT</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: Arial, sans-serif;
+    }
+
+    body {
+      background: #080808;
+      color: white;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .app {
+      width: 100%;
+      max-width: 420px;
+    }
+
+    .title {
+      text-align: center;
+      margin-bottom: 25px;
+      font-size: 15px;
+      letter-spacing: 2px;
+    }
+
+    .card {
+      background: #141414;
+      border: 1px solid #292929;
+      border-radius: 18px;
+      padding: 24px;
+      margin-bottom: 15px;
+    }
+
+    .pair {
+      font-size: 28px;
+      font-weight: bold;
+      text-align: center;
+      direction: ltr;
+    }
+
+    .sub {
+      color: #888;
+      text-align: center;
+      font-size: 13px;
+      margin-top: 8px;
+    }
+
+    .btn {
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 20px;
+      background: #b6ff32;
+      color: #080808;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .status {
+      text-align: center;
+      font-size: 15px;
+      line-height: 1.8;
+    }
+
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #777;
+      margin-left: 7px;
+    }
+
+    .connected {
+      background: #4cff9a;
+    }
+
+    .error {
+      background: #ff4c4c;
+    }
+
+    .footer {
+      color: #555;
+      text-align: center;
+      font-size: 11px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="app">
+
+    <div class="title">FAWAZ AI BOT</div>
+
+    <div class="card">
+      <div class="pair">SOL / USDC</div>
+      <div class="sub">OKX Trading Bot</div>
+
+      <button class="btn" onclick="checkOKX()">
+        اختبار اتصال OKX
+      </button>
+    </div>
+
+    <div class="card">
+      <div class="status" id="status">
+        <span class="dot"></span>
+        جاهز للاختبار
+      </div>
+    </div>
+
+    <div class="footer">
+      FAWAZ AI BOT • OKX API
+    </div>
+
+  </div>
+
+  <script>
+    async function checkOKX() {
+      const status = document.getElementById("status");
+
+      status.innerHTML =
+        '<span class="dot"></span> جاري الاتصال بـ OKX...';
+
+      try {
+        const response = await fetch("/api/api/okx-test");
+        const data = await response.json();
+
+        if (data.status === "ok") {
+          status.innerHTML =
+            '<span class="dot connected"></span> OKX متصل بنجاح ✅';
+        } else {
+          status.innerHTML =
+            '<span class="dot error"></span> خطأ: ' +
+            (data.message || "فشل الاتصال");
+        }
+
+      } catch (error) {
+        status.innerHTML =
+          '<span class="dot error"></span> تعذر الاتصال بالسيرفر';
+      }
+    }
+  </script>
+
+</body>
+</html>
