@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="ar" dir="rtl">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
 
   <meta
     name="viewport"
     content="width=device-width, initial-scale=1"
-  />
+  >
 
   <title>FAWAZ AI DEX TRADER</title>
 
@@ -18,129 +18,185 @@
     body {
       font-family: Arial, sans-serif;
       margin: 0;
-      padding: 20px;
-      background: #f7f7f8;
+      padding: 18px;
+      background: #f6f7f9;
       color: #111;
     }
 
     .container {
-      max-width: 700px;
+      max-width: 760px;
       margin: 0 auto;
     }
 
-    .header {
+    .header,
+    .panel,
+    .stat {
       background: #fff;
-      border-radius: 18px;
-      padding: 20px;
+      box-shadow:
+        0 3px 16px rgba(0,0,0,0.06);
+    }
+
+    .header {
+      border-radius: 22px;
+      padding: 22px;
       margin-bottom: 16px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.06);
     }
 
     h1 {
-      margin: 0 0 8px;
-      font-size: 28px;
+      margin: 0;
+      font-size: 27px;
     }
 
     h2 {
       margin-top: 0;
+      margin-bottom: 14px;
+      font-size: 22px;
     }
 
     .wallet {
       margin-top: 12px;
-      font-size: 15px;
+      color: #555;
+      font-size: 14px;
       word-break: break-all;
     }
 
     .status {
+      margin-top: 15px;
+      padding: 14px;
+      border-radius: 13px;
+      font-weight: 800;
+      background: #f1f3f5;
+    }
+
+    .paper-badge {
+      display: inline-block;
       margin-top: 12px;
-      padding: 12px;
-      background: #f3f4f6;
-      border-radius: 10px;
-      font-weight: 700;
+      padding: 7px 12px;
+      border-radius: 999px;
+      background: #fff3cd;
+      color: #795d00;
+      font-size: 13px;
+      font-weight: 800;
     }
 
     .grid {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns:
+        repeat(2, 1fr);
       gap: 12px;
       margin-bottom: 16px;
     }
 
     .stat {
-      background: #fff;
-      border-radius: 16px;
-      padding: 16px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+      border-radius: 17px;
+      padding: 17px;
     }
 
     .stat-title {
-      font-size: 14px;
       color: #666;
+      font-size: 13px;
       margin-bottom: 8px;
     }
 
     .stat-value {
-      font-size: 24px;
-      font-weight: 800;
-    }
-
-    .positive {
-      color: green;
-    }
-
-    .negative {
-      color: red;
-    }
-
-    .neutral {
-      color: #555;
+      font-size: 23px;
+      font-weight: 900;
     }
 
     .panel {
-      background: #fff;
-      border-radius: 16px;
-      padding: 18px;
+      border-radius: 18px;
+      padding: 19px;
       margin-bottom: 16px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-      line-height: 1.9;
+      line-height: 1.7;
     }
 
     .row {
       display: flex;
-      justify-content: space-between;
-      gap: 20px;
-      border-bottom: 1px solid #eee;
-      padding: 7px 0;
+      justify-content:
+        space-between;
+      align-items: center;
+      gap: 18px;
+      padding: 9px 0;
+      border-bottom:
+        1px solid #eee;
     }
 
     .row:last-child {
       border-bottom: 0;
     }
 
+    .row span:first-child {
+      color: #666;
+    }
+
     .buy {
-      color: green;
-      font-weight: 800;
+      color: #128a43;
+      font-weight: 900;
     }
 
     .sell {
-      color: red;
-      font-weight: 800;
+      color: #d32f2f;
+      font-weight: 900;
     }
 
     .hold {
       color: #555;
-      font-weight: 800;
+      font-weight: 900;
+    }
+
+    .positive {
+      color: #128a43;
+    }
+
+    .negative {
+      color: #d32f2f;
+    }
+
+    .neutral {
+      color: #555;
+    }
+
+    .slots {
+      display: grid;
+      gap: 10px;
+    }
+
+    .slot {
+      padding: 14px;
+      border-radius: 14px;
+      background: #f7f8fa;
+      border: 1px solid #eceef1;
+    }
+
+    .slot-title {
+      display: flex;
+      justify-content:
+        space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-weight: 900;
+    }
+
+    .slot-empty {
+      color: #888;
+    }
+
+    .event {
+      padding: 11px;
+      margin-top: 8px;
+      background: #f7f8fa;
+      border-radius: 12px;
+      font-size: 13px;
     }
 
     button {
       width: 100%;
       border: 0;
-      border-radius: 14px;
-      padding: 15px;
+      border-radius: 15px;
+      padding: 16px;
       font-size: 17px;
-      font-weight: 700;
+      font-weight: 900;
       cursor: pointer;
-      margin-bottom: 12px;
     }
 
     #runButton {
@@ -154,22 +210,26 @@
     }
 
     .small {
-      color: #666;
-      font-size: 13px;
+      margin-top: 10px;
+      color: #777;
+      font-size: 12px;
       line-height: 1.7;
     }
 
-    @media (max-width: 520px) {
+    @media (
+      max-width: 520px
+    ) {
       .grid {
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns:
+          1fr 1fr;
       }
 
       .stat-value {
-        font-size: 20px;
+        font-size: 19px;
       }
 
       h1 {
-        font-size: 23px;
+        font-size: 22px;
       }
     }
   </style>
@@ -179,26 +239,37 @@
 
 <div class="container">
 
+  <!-- HEADER -->
+
   <div class="header">
-    <h1>⚡ FAWAZ AI DEX TRADER</h1>
+
+    <h1>
+      ⚡ FAWAZ AI DEX TRADER
+    </h1>
 
     <div class="wallet">
       <b>محفظة البوت:</b>
-      <span id="walletAddress"></span>
+      <span id="walletAddress">
+        -
+      </span>
+    </div>
+
+    <div class="paper-badge">
+      🧪 PAPER TRADING
+      — بدون أموال حقيقية
     </div>
 
     <div
-      class="status"
       id="botStatus"
+      class="status"
     >
-      🟢 البوت جاهز
+      ⏳ بانتظار أول دورة
     </div>
+
   </div>
 
 
-  <!-- ========================= -->
-  <!-- PROFIT DASHBOARD -->
-  <!-- ========================= -->
+  <!-- MAIN STATS -->
 
   <div class="grid">
 
@@ -209,9 +280,9 @@
 
       <div
         id="dayPnl"
-        class="stat-value"
+        class="stat-value neutral"
       >
-        0.000 USDC
+        0.0000 USDC
       </div>
     </div>
 
@@ -223,9 +294,9 @@
 
       <div
         id="totalPnl"
-        class="stat-value"
+        class="stat-value neutral"
       >
-        0.000 USDC
+        0.0000 USDC
       </div>
     </div>
 
@@ -260,66 +331,49 @@
   </div>
 
 
-  <!-- ========================= -->
-  <!-- BALANCES -->
-  <!-- ========================= -->
+  <!-- AI DECISION -->
 
   <div class="panel">
 
     <h2>
-      💰 المحفظة
-    </h2>
-
-    <div class="row">
-      <span>SOL</span>
-      <b id="solBalance">-</b>
-    </div>
-
-    <div class="row">
-      <span>USDC</span>
-      <b id="usdcBalance">-</b>
-    </div>
-
-  </div>
-
-
-  <!-- ========================= -->
-  <!-- CURRENT DECISION -->
-  <!-- ========================= -->
-
-  <div class="panel">
-
-    <h2>
-      🤖 قرار البوت
+      🤖 قرار الوكلاء
     </h2>
 
     <div class="row">
       <span>القرار</span>
-
-      <span
+      <b
         id="decision"
         class="hold"
       >
         -
-      </span>
+      </b>
     </div>
 
     <div class="row">
       <span>الثقة</span>
-      <b id="confidence">-</b>
+      <b id="confidence">
+        -
+      </b>
     </div>
 
     <div class="row">
       <span>السبب</span>
-      <b id="reason">-</b>
+      <b id="reason">
+        -
+      </b>
+    </div>
+
+    <div class="row">
+      <span>وضع المخاطر</span>
+      <b id="riskMode">
+        -
+      </b>
     </div>
 
   </div>
 
 
-  <!-- ========================= -->
   <!-- MARKET -->
-  <!-- ========================= -->
 
   <div class="panel">
 
@@ -329,102 +383,133 @@
 
     <div class="row">
       <span>سعر SOL</span>
-      <b id="price">-</b>
+      <b id="price">
+        -
+      </b>
     </div>
 
     <div class="row">
-      <span>SMA10</span>
-      <b id="sma10">-</b>
+      <span>Market Mode</span>
+      <b id="marketMode">
+        -
+      </b>
     </div>
 
     <div class="row">
-      <span>SMA30</span>
-      <b id="sma30">-</b>
+      <span>Scalping Score</span>
+      <b id="scalpingScore">
+        -
+      </b>
     </div>
 
     <div class="row">
-      <span>Momentum</span>
-      <b id="momentum">-</b>
-    </div>
-
-    <div class="row">
-      <span>Volatility</span>
-      <b id="volatility">-</b>
+      <span>هدف الصفقة</span>
+      <b id="targetBps">
+        -
+      </b>
     </div>
 
   </div>
 
 
-  <!-- ========================= -->
-  <!-- OPEN POSITION -->
-  <!-- ========================= -->
+  <!-- SLOT STATUS -->
 
   <div class="panel">
 
     <h2>
-      📌 الصفقة الحالية
+      🎯 Slots
     </h2>
 
-    <div
-      id="noPosition"
-      class="neutral"
-    >
-      لا توجد صفقة مفتوحة حاليًا.
+    <div class="row">
+      <span>المفتوحة</span>
+      <b id="openSlots">
+        0 / 4
+      </b>
     </div>
 
     <div
-      id="positionDetails"
-      style="display:none;"
+      id="slotsContainer"
+      class="slots"
     >
-
-      <div class="row">
-        <span>سعر الدخول</span>
-        <b id="entryPrice">-</b>
-      </div>
-
-      <div class="row">
-        <span>قيمة الدخول</span>
-        <b id="entryUsdc">-</b>
-      </div>
-
-      <div class="row">
-        <span>كمية SOL</span>
-        <b id="entrySol">-</b>
-      </div>
-
-      <div class="row">
-        <span>الربح العائم</span>
-        <b id="floatingPnl">-</b>
-      </div>
-
     </div>
 
   </div>
 
 
-  <!-- ========================= -->
-  <!-- TRADING STATS -->
-  <!-- ========================= -->
+  <!-- LAST ENTRY -->
 
   <div class="panel">
 
     <h2>
-      🧠 إحصائيات التداول
+      🚪 آخر محاولة دخول
+    </h2>
+
+    <div class="row">
+      <span>النتيجة</span>
+      <b id="entryStatus">
+        -
+      </b>
+    </div>
+
+    <div class="row">
+      <span>السبب</span>
+      <b id="entryReason">
+        -
+      </b>
+    </div>
+
+    <div class="row">
+      <span>Slot</span>
+      <b id="entrySlot">
+        -
+      </b>
+    </div>
+
+  </div>
+
+
+  <!-- POSITION EVENTS -->
+
+  <div class="panel">
+
+    <h2>
+      🧠 أحداث الصفقات
+    </h2>
+
+    <div id="events">
+      لا توجد أحداث بعد.
+    </div>
+
+  </div>
+
+
+  <!-- TOTAL STATS -->
+
+  <div class="panel">
+
+    <h2>
+      📈 إحصائيات Neon
     </h2>
 
     <div class="row">
       <span>الرابحة</span>
-      <b id="wins">0</b>
+      <b id="wins">
+        0
+      </b>
     </div>
 
     <div class="row">
       <span>الخاسرة</span>
-      <b id="losses">0</b>
+      <b id="losses">
+        0
+      </b>
     </div>
 
     <div class="row">
       <span>إجمالي الصفقات</span>
-      <b id="totalTrades">0</b>
+      <b id="totalTrades">
+        0
+      </b>
     </div>
 
   </div>
@@ -434,13 +519,15 @@
     id="runButton"
     type="button"
   >
-    🔄 تشغيل دورة تداول الآن
+    🔄 تشغيل دورة Paper الآن
   </button>
 
   <div class="small">
-    البوت الآلي يعمل من GitHub Actions بشكل مستقل.
-    هذا الزر يشغّل دورة إضافية يدويًا الآن، وقد ينفذ
-    صفقة حقيقية إذا تحققت شروط الدخول أو الخروج.
+    الزر الحالي يشغّل دورة تداول
+    ورقية فقط. قد يفتح أو يغلق
+    Slot وهميًا في Neon، لكنه لا
+    يستدعي Jupiter ولا يرسل أي
+    معاملة حقيقية للمحفظة.
   </div>
 
 </div>
@@ -448,20 +535,7 @@
 
 <script>
 
-  // =========================================
-  // BOT WALLET
-  // =========================================
-
-  const BOT_WALLET_ADDRESS =
-    "3jDHDWej98HoeAD3aYcahy1BuShKfREssnMGLYpHGski";
-
-
-  document.getElementById(
-    "walletAddress"
-  ).textContent =
-    BOT_WALLET_ADDRESS.slice(0, 7) +
-    "..." +
-    BOT_WALLET_ADDRESS.slice(-6);
+  const MAX_SLOTS = 4;
 
 
   // =========================================
@@ -479,7 +553,9 @@
       return "-";
     }
 
-    return n.toFixed(decimals);
+    return n.toFixed(
+      decimals
+    );
   }
 
 
@@ -487,7 +563,7 @@
     element,
     value
   ) {
-    const number =
+    const n =
       Number(value || 0);
 
     element.classList.remove(
@@ -496,12 +572,12 @@
       "neutral"
     );
 
-    if (number > 0) {
+    if (n > 0) {
       element.classList.add(
         "positive"
       );
     }
-    else if (number < 0) {
+    else if (n < 0) {
       element.classList.add(
         "negative"
       );
@@ -514,197 +590,472 @@
   }
 
 
-  // =========================================
-  // UPDATE DASHBOARD
-  // =========================================
-
-  function updateDashboard(data) {
-
-    const market =
-      data.market || {};
-
-    const balances =
-      data.balances || {};
-
-    const stats =
-      data.stats || {};
-
-    const day =
-      stats.last24Hours || {};
-
-    const total =
-      stats.allTime || {};
-
-
-    // =========================
-    // STATUS
-    // =========================
-
-    const botStatus =
-      document.getElementById(
-        "botStatus"
-      );
-
-    if (data.status === "error") {
-      botStatus.textContent =
-        "🔴 خطأ في البوت";
-    }
-    else if (
-      data.status === "paused"
-    ) {
-      botStatus.textContent =
-        "⏸️ التداول متوقف مؤقتًا";
-    }
-    else {
-      botStatus.textContent =
-        "🟢 البوت يعمل";
-    }
-
-
-    // =========================
-    // BALANCES
-    // =========================
-
-    document.getElementById(
-      "solBalance"
-    ).textContent =
-      numberValue(
-        balances.solBalance,
-        6
-      );
-
-    document.getElementById(
-      "usdcBalance"
-    ).textContent =
-      numberValue(
-        balances.usdcBalance,
-        4
-      );
-
-
-    // =========================
-    // DECISION
-    // =========================
-
-    const decision =
-      String(
-        data.decision || "-"
-      ).toUpperCase();
-
-    const decisionElement =
+  function setDecision(
+    value
+  ) {
+    const element =
       document.getElementById(
         "decision"
       );
 
-    decisionElement.textContent =
+    const decision =
+      String(
+        value || "WAIT"
+      ).toUpperCase();
+
+    element.textContent =
       decision;
 
-    decisionElement.className = "";
+    element.className = "";
 
     if (decision === "BUY") {
-      decisionElement.classList.add(
+      element.classList.add(
         "buy"
       );
     }
     else if (
       decision === "SELL"
     ) {
-      decisionElement.classList.add(
+      element.classList.add(
         "sell"
       );
     }
     else {
-      decisionElement.classList.add(
+      element.classList.add(
         "hold"
       );
     }
+  }
+
+
+  // =========================================
+  // SLOTS
+  // =========================================
+
+  function renderSlots(
+    positions,
+    currentPrice
+  ) {
+    const container =
+      document.getElementById(
+        "slotsContainer"
+      );
+
+    container.innerHTML = "";
+
+
+    for (
+      let slotId = 1;
+      slotId <= MAX_SLOTS;
+      slotId++
+    ) {
+
+      const position =
+        positions.find(
+          (item) =>
+            Number(
+              item.slot_id
+            ) === slotId
+        );
+
+
+      const card =
+        document.createElement(
+          "div"
+        );
+
+      card.className =
+        "slot";
+
+
+      if (!position) {
+
+        card.innerHTML = `
+          <div class="slot-title">
+            <span>
+              Slot ${slotId}
+            </span>
+
+            <span class="slot-empty">
+              فارغ
+            </span>
+          </div>
+        `;
+
+        container.appendChild(
+          card
+        );
+
+        continue;
+      }
+
+
+      const entryPrice =
+        Number(
+          position.entry_price
+        );
+
+
+      let pnlPct = 0;
+
+
+      if (
+        Number.isFinite(
+          currentPrice
+        ) &&
+        currentPrice > 0 &&
+        entryPrice > 0
+      ) {
+        pnlPct =
+          (
+            (
+              currentPrice -
+              entryPrice
+            ) /
+            entryPrice
+          ) *
+          100;
+      }
+
+
+      const pnlClass =
+        pnlPct > 0
+          ? "positive"
+          : pnlPct < 0
+          ? "negative"
+          : "neutral";
+
+
+      card.innerHTML = `
+        <div class="slot-title">
+          <span>
+            Slot ${slotId}
+          </span>
+
+          <span class="buy">
+            OPEN
+          </span>
+        </div>
+
+        <div class="row">
+          <span>سعر الدخول</span>
+          <b>
+            ${numberValue(
+              position.entry_price,
+              4
+            )}
+          </b>
+        </div>
+
+        <div class="row">
+          <span>قيمة الصفقة</span>
+          <b>
+            ${numberValue(
+              position.entry_usdc,
+              4
+            )} USDC
+          </b>
+        </div>
+
+        <div class="row">
+          <span>كمية SOL</span>
+          <b>
+            ${numberValue(
+              position.entry_sol,
+              6
+            )}
+          </b>
+        </div>
+
+        <div class="row">
+          <span>الربح العائم</span>
+          <b class="${pnlClass}">
+            ${numberValue(
+              pnlPct,
+              3
+            )}%
+          </b>
+        </div>
+
+        <div class="row">
+          <span>أعلى سعر</span>
+          <b>
+            ${numberValue(
+              position.highest_price,
+              4
+            )}
+          </b>
+        </div>
+
+        <div class="row">
+          <span>Trailing</span>
+          <b>
+            ${
+              position
+                .trailing_active
+                ? "فعال ✅"
+                : "غير فعال"
+            }
+          </b>
+        </div>
+      `;
+
+
+      container.appendChild(
+        card
+      );
+    }
+  }
+
+
+  // =========================================
+  // EVENTS
+  // =========================================
+
+  function renderEvents(
+    events
+  ) {
+    const container =
+      document.getElementById(
+        "events"
+      );
+
+
+    if (
+      !Array.isArray(events) ||
+      events.length === 0
+    ) {
+      container.textContent =
+        "لا توجد أحداث في هذه الدورة.";
+
+      return;
+    }
+
+
+    container.innerHTML = "";
+
+
+    for (
+      const event
+      of events
+    ) {
+      const element =
+        document.createElement(
+          "div"
+        );
+
+      element.className =
+        "event";
+
+
+      element.textContent =
+        `Slot ${
+          event.slotId ?? "-"
+        } — ${
+          event.action ||
+          event.event ||
+          "-"
+        } — ${
+          event.reason ||
+          ""
+        }`;
+
+
+      container.appendChild(
+        element
+      );
+    }
+  }
+
+
+  // =========================================
+  // UPDATE UI
+  // =========================================
+
+  function updateDashboard(
+    data
+  ) {
+    const signal =
+      data.signal || {};
+
+    const dashboard =
+      data.dashboard || {};
+
+    const day =
+      dashboard
+        .last24Hours || {};
+
+    const total =
+      dashboard
+        .allTime || {};
+
+    const positions =
+      Array.isArray(
+        dashboard.openPositions
+      )
+        ? dashboard.openPositions
+        : [];
+
+
+    // STATUS
+
+    const status =
+      document.getElementById(
+        "botStatus"
+      );
+
+
+    if (
+      data.status === "ok" &&
+      data.paperTrading === true
+    ) {
+      status.textContent =
+        "🟢 Paper Scalper يعمل بشكل صحيح";
+    }
+    else {
+      status.textContent =
+        "🔴 يوجد خطأ في المحرك";
+    }
+
+
+    // WALLET
+
+    const wallet =
+      String(
+        data.walletAddress ||
+        "3jDHDWej98HoeAD3aYcahy1BuShKfREssnMGLYpHGski"
+      );
+
+
+    document.getElementById(
+      "walletAddress"
+    ).textContent =
+      wallet.length > 14
+        ? (
+            wallet.slice(0, 7) +
+            "..." +
+            wallet.slice(-6)
+          )
+        : wallet;
+
+
+    // SIGNAL
+
+    setDecision(
+      signal.action
+    );
 
 
     document.getElementById(
       "confidence"
     ).textContent =
-      data.confidence != null
-        ? data.confidence + "%"
+      signal.confidence != null
+        ? signal.confidence + "%"
         : "-";
 
 
     document.getElementById(
       "reason"
     ).textContent =
-      data.reason ||
-      data.exitReason ||
-      data.message ||
-      "-";
+      signal.reason || "-";
 
 
-    // =========================
+    document.getElementById(
+      "riskMode"
+    ).textContent =
+      data.riskMode || "-";
+
+
     // MARKET
-    // =========================
+
+    const currentPrice =
+      Number(
+        signal.currentPrice
+      );
+
 
     document.getElementById(
       "price"
     ).textContent =
       numberValue(
-        market.currentPrice,
+        currentPrice,
         4
-      );
+      ) +
+      " USDC";
+
 
     document.getElementById(
-      "sma10"
+      "marketMode"
     ).textContent =
-      numberValue(
-        market.sma10,
-        4
-      );
+      signal.marketMode || "-";
+
 
     document.getElementById(
-      "sma30"
+      "scalpingScore"
     ).textContent =
-      numberValue(
-        market.sma30,
-        4
-      );
-
-    document.getElementById(
-      "momentum"
-    ).textContent =
-      market.momentum != null
-        ? numberValue(
-            market.momentum,
-            3
-          ) + "%"
-        : "-";
-
-    document.getElementById(
-      "volatility"
-    ).textContent =
-      market.volatility != null
-        ? numberValue(
-            market.volatility,
-            3
-          ) + "%"
+      signal.scalpingScore != null
+        ? signal.scalpingScore +
+          " / 100"
         : "-";
 
 
-    // =========================
-    // DAY STATS
-    // =========================
+    document.getElementById(
+      "targetBps"
+    ).textContent =
+      data.targetBps != null
+        ? (
+            data.targetBps +
+            " bps (" +
+            numberValue(
+              Number(
+                data.targetBps
+              ) / 100,
+              2
+            ) +
+            "%)"
+          )
+        : "-";
 
-    const dayPnlElement =
+
+    // STATS
+
+    const dayPnl =
       document.getElementById(
         "dayPnl"
       );
 
-    dayPnlElement.textContent =
+
+    dayPnl.textContent =
       numberValue(
         day.pnl || 0,
         4
       ) +
       " USDC";
 
+
     setPnlColor(
-      dayPnlElement,
+      dayPnl,
       day.pnl
+    );
+
+
+    const totalPnl =
+      document.getElementById(
+        "totalPnl"
+      );
+
+
+    totalPnl.textContent =
+      numberValue(
+        total.pnl || 0,
+        4
+      ) +
+      " USDC";
+
+
+    setPnlColor(
+      totalPnl,
+      total.pnl
     );
 
 
@@ -724,37 +1075,17 @@
       "%";
 
 
-    // =========================
-    // TOTAL STATS
-    // =========================
-
-    const totalPnlElement =
-      document.getElementById(
-        "totalPnl"
-      );
-
-    totalPnlElement.textContent =
-      numberValue(
-        total.pnl || 0,
-        4
-      ) +
-      " USDC";
-
-    setPnlColor(
-      totalPnlElement,
-      total.pnl
-    );
-
-
     document.getElementById(
       "wins"
     ).textContent =
       total.wins || 0;
 
+
     document.getElementById(
       "losses"
     ).textContent =
       total.losses || 0;
+
 
     document.getElementById(
       "totalTrades"
@@ -762,151 +1093,108 @@
       total.trades || 0;
 
 
-    // =========================
-    // OPEN POSITION
-    // =========================
+    // SLOTS
 
-    const position =
-      data.openPosition || null;
+    document.getElementById(
+      "openSlots"
+    ).textContent =
+      positions.length +
+      " / " +
+      MAX_SLOTS;
 
-    const noPosition =
-      document.getElementById(
-        "noPosition"
+
+    renderSlots(
+      positions,
+      currentPrice
+    );
+
+
+    // ENTRY RESULT
+
+    const entry =
+      data.entryResult || {};
+
+
+    document.getElementById(
+      "entryStatus"
+    ).textContent =
+      entry.opened === true
+        ? "تم فتح Slot ✅"
+        : "لم يتم الدخول";
+
+
+    document.getElementById(
+      "entryReason"
+    ).textContent =
+      entry.reason ||
+      (
+        entry.opened
+          ? "PAPER_BUY"
+          : "-"
       );
 
-    const positionDetails =
-      document.getElementById(
-        "positionDetails"
-      );
+
+    document.getElementById(
+      "entrySlot"
+    ).textContent =
+      entry.slotId ?? "-";
 
 
-    if (position) {
+    // EVENTS
 
-      noPosition.style.display =
-        "none";
-
-      positionDetails.style.display =
-        "block";
-
-
-      document.getElementById(
-        "entryPrice"
-      ).textContent =
-        numberValue(
-          position.entry_price,
-          4
-        );
-
-
-      document.getElementById(
-        "entryUsdc"
-      ).textContent =
-        numberValue(
-          position.entry_usdc,
-          4
-        ) +
-        " USDC";
-
-
-      document.getElementById(
-        "entrySol"
-      ).textContent =
-        numberValue(
-          position.entry_sol,
-          6
-        );
-
-
-      const floating =
-        position.currentPnlPct;
-
-
-      const floatingElement =
-        document.getElementById(
-          "floatingPnl"
-        );
-
-
-      if (
-        floating != null
-      ) {
-
-        floatingElement.textContent =
-          numberValue(
-            floating,
-            3
-          ) +
-          "%";
-
-        setPnlColor(
-          floatingElement,
-          floating
-        );
-
-      }
-      else {
-
-        floatingElement.textContent =
-          "-";
-
-      }
-
-    }
-    else {
-
-      noPosition.style.display =
-        "block";
-
-      positionDetails.style.display =
-        "none";
-
-    }
+    renderEvents(
+      data.positionEvents
+    );
   }
 
 
   // =========================================
-  // RUN TRADING CYCLE
+  // PAPER CYCLE
   // =========================================
 
-  async function runTradingCycle() {
+  async function runPaperCycle() {
 
     const button =
       document.getElementById(
         "runButton"
       );
 
-    const botStatus =
+    const status =
       document.getElementById(
         "botStatus"
       );
 
-    button.disabled = true;
+
+    button.disabled =
+      true;
+
 
     button.textContent =
-      "⏳ جارٍ تحليل السوق...";
+      "⏳ الوكلاء يحللون السوق...";
 
-    botStatus.textContent =
-      "🤖 الوكلاء يحللون السوق";
+
+    status.textContent =
+      "🤖 Market + Signal + Risk يعملون الآن";
 
 
     try {
+
+      // GET متعمد حاليًا لأن
+      // Orchestrator الموجود Paper فقط.
 
       const response =
         await fetch(
           "/api/trade-orchestrator",
           {
-            method: "POST",
+            method: "GET",
 
             headers: {
-              "Content-Type":
+              Accept:
                 "application/json"
             },
 
-            body:
-              JSON.stringify({
-                walletAddress:
-                  BOT_WALLET_ADDRESS
-              })
+            cache:
+              "no-store"
           }
         );
 
@@ -918,7 +1206,16 @@
       if (!response.ok) {
         throw new Error(
           data.message ||
-          "فشل تشغيل دورة التداول"
+          "فشل تشغيل Paper Scalper"
+        );
+      }
+
+
+      if (
+        data.realTrading !== false
+      ) {
+        throw new Error(
+          "تم رفض التشغيل: الواجهة تقبل Paper Trading فقط"
         );
       }
 
@@ -929,21 +1226,20 @@
 
 
       localStorage.setItem(
-        "fawazBotLastData",
+        "fawazPaperDashboard",
         JSON.stringify(
           data
         )
       );
 
-
     }
     catch (error) {
 
-      botStatus.textContent =
+      status.textContent =
         "🔴 " +
         (
           error.message ||
-          "تعذر الاتصال بالبوت"
+          "تعذر الاتصال بالمحرك"
         );
 
     }
@@ -952,37 +1248,47 @@
       button.disabled =
         false;
 
-      button.textContent =
-        "🔄 تشغيل دورة تداول الآن";
 
+      button.textContent =
+        "🔄 تشغيل دورة Paper الآن";
     }
   }
 
 
   // =========================================
-  // LOAD LAST DATA
+  // LOAD LAST SAFE PAPER RESULT
   // =========================================
 
   try {
 
     const saved =
       localStorage.getItem(
-        "fawazBotLastData"
+        "fawazPaperDashboard"
       );
 
 
     if (saved) {
 
-      updateDashboard(
-        JSON.parse(saved)
-      );
+      const parsed =
+        JSON.parse(saved);
 
+
+      if (
+        parsed?.paperTrading ===
+          true &&
+        parsed?.realTrading ===
+          false
+      ) {
+        updateDashboard(
+          parsed
+        );
+      }
     }
 
   }
-  catch (error) {
+  catch {
     console.log(
-      "No saved dashboard data"
+      "No Paper dashboard cache"
     );
   }
 
@@ -995,7 +1301,7 @@
     "runButton"
   ).addEventListener(
     "click",
-    runTradingCycle
+    runPaperCycle
   );
 
 </script>
