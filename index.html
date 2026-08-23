@@ -5,12 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FAWAZ AI BOT</title>
   <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FAWAZ AI BOT</title>
+
+  <script src="https://plugin.jup.ag/plugin-v1.js" data-preload defer></script>
+
+  <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #111; }
     .card { max-width: 520px; }
     button { margin-left: 8px; padding: 8px 12px; cursor: pointer; }
     .status { margin-top: 14px; font-weight: 700; }
+    #jupiter-plugin { height: 620px; margin-top: 18px; }
   </style>
 </head>
+
 <body>
   <div class="card">
     <h3>⚡ على سولانا DEX تداول</h3>
@@ -26,6 +38,13 @@
     <button id="testButton" type="button" disabled>اختبار الاتصال</button>
 
     <div class="status" id="dexStatus">بانتظار ربط المحفظة</div>
+
+    <hr />
+
+    <h3>اختبار صفقة حقيقية محدود</h3>
+    <p>0.01 SOL إلى USDC فقط — راجع التفاصيل داخل Jupiter قبل الموافقة.</p>
+
+    <div id="jupiter-plugin"></div>
   </div>
 
   <script>
@@ -41,18 +60,15 @@
       const status = document.getElementById("dexStatus");
       const wallet = document.getElementById("walletAddress");
       const testButton = document.getElementById("testButton");
-
       const provider = getOKXProvider();
 
       if (!provider) {
-        status.textContent =
-          "لم يتم العثور على محفظة OKX. افتح الصفحة من متصفح OKX Wallet.";
+        status.textContent = "افتح الصفحة من متصفح OKX Wallet.";
         return;
       }
 
       try {
         status.textContent = "بانتظار موافقة محفظة OKX...";
-
         const result = await provider.connect();
         const publicKey = result && result.publicKey
           ? result.publicKey
@@ -70,29 +86,45 @@
         status.textContent = "✅ تم ربط محفظة OKX بنجاح";
         testButton.disabled = false;
       } catch (error) {
-        status.textContent =
-          "❌ لم يكتمل الربط: " + (error.message || "تم الإلغاء");
+        status.textContent = "❌ لم يكتمل الربط: " + (error.message || "تم الإلغاء");
       }
     }
 
     function testConnection() {
-      if (!connectedAddress) {
-        document.getElementById("dexStatus").textContent =
-          "اربط المحفظة أولًا.";
-        return;
-      }
-
       document.getElementById("dexStatus").textContent =
-        "✅ الاتصال سليم. لم تُنفذ أي صفقة أو عملية سحب.";
+        connectedAddress
+          ? "✅ الاتصال سليم، ولم تُنفذ أي صفقة أو عملية سحب."
+          : "اربط المحفظة أولًا.";
     }
 
-    document
-      .getElementById("connectButton")
+    document.getElementById("connectButton")
       .addEventListener("click", connectOKXWallet);
 
-    document
-      .getElementById("testButton")
+    document.getElementById("testButton")
       .addEventListener("click", testConnection);
+
+    window.addEventListener("load", function () {
+      window.Jupiter.init({
+        displayMode: "integrated",
+        integratedTargetId: "jupiter-plugin",
+        formProps: {
+          initialInputMint: "So11111111111111111111111111111111111111112",
+          initialOutputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          initialAmount: "0.01",
+          fixedMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          fixedAmount: true,
+          swapMode: "ExactIn"
+        },
+        onSuccess: function ({ txid }) {
+          document.getElementById("dexStatus").textContent =
+            "✅ تمت الصفقة بنجاح: " + txid;
+        },
+        onSwapError: function () {
+          document.getElementById("dexStatus").textContent =
+            "❌ لم تُنفذ الصفقة أو تم إلغاؤها.";
+        }
+      });
+    });
   </script>
 </body>
 </html>
