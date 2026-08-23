@@ -1485,7 +1485,7 @@ export default async function handler(
   }
 
 
-  return res
+    return res
     .status(405)
     .json({
       status: "error",
@@ -1497,5 +1497,3 @@ export default async function handler(
         "GET or POST only"
     });
 }
-  // ====================================================
-  // GET = ANALYSIS
