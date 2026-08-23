@@ -1115,11 +1115,311 @@ async function executeApprovedSell({
     };
   }
 
-  const usdcReceived =
+    const usdcReceived =
     atomicToAmount(
       execution
         ?.quote
         ?.outAmount,
-
       USDC_DECIMALS
     );
+
+  if (usdcReceived <= 0) {
+    throw new Error(
+      "INVALID_USDC_RECEIVED"
+    );
+  }
+
+  const closed =
+    await closePosition({
+      id:
+        position.id,
+
+      exitPrice:
+        analysis.currentPrice,
+
+      exitUsdc:
+        usdcReceived,
+
+      signature:
+        execution.signature,
+
+      reason:
+        candidate.reason
+    });
+
+  return {
+    executed: true,
+    side: "SELL",
+    slotId,
+    amountSol,
+    usdcReceived,
+    reason:
+      candidate.reason,
+    signature:
+      execution.signature,
+    position:
+      closed
+  };
+}
+
+
+// ======================================================
+// MAIN HANDLER
+// ======================================================
+
+export default async function handler(
+  req,
+  res
+) {
+
+  // GET = ANALYSIS ONLY
+
+  if (req.method === "GET") {
+    try {
+      const analysis =
+        await analyzeSystem(req);
+
+      return res.status(200).json({
+        status: "ok",
+        engine:
+          "FAWAZ_LIVE_CANDIDATE_V1",
+        liveMarket: true,
+        realTrading: true,
+        execution:
+          "APPROVAL_REQUIRED",
+
+        walletAddress:
+          analysis.walletAddress,
+
+        capital:
+          analysis.capital,
+
+        signal: {
+          signalId:
+            analysis.signal.signalId ||
+            null,
+
+          action:
+            analysis.signal.action ||
+            "WAIT",
+
+          confidence:
+            num(
+              analysis.signal.confidence
+            ),
+
+          reason:
+            analysis.signal.reason ||
+            "-",
+
+          currentPrice:
+            analysis.currentPrice,
+
+          marketMode:
+            analysis.signal.marketMode ||
+            "-",
+
+          scalpingScore:
+            num(
+              analysis.signal.scalpingScore
+            ),
+
+          spreadBps:
+            num(
+              analysis.signal.spreadBps
+            ),
+
+          volatilityBps:
+            num(
+              analysis.signal.volatilityBps
+            ),
+
+          direction:
+            analysis.signal.direction ||
+            "-"
+        },
+
+        riskMode:
+          analysis.riskMode,
+
+        buyCandidate:
+          analysis.buyCandidate,
+
+        sellCandidates:
+          analysis.sellCandidates,
+
+        dashboard:
+          analysis.dashboard,
+
+        timestamp:
+          new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error(
+        "Live Analysis Error:",
+        error
+      );
+
+      return res.status(500).json({
+        status: "error",
+        engine:
+          "FAWAZ_LIVE_CANDIDATE_V1",
+        message:
+          error?.message ||
+          "Live analysis failed",
+        timestamp:
+          new Date().toISOString()
+      });
+    }
+  }
+
+
+  // POST = REAL EXECUTION
+
+  if (req.method === "POST") {
+
+    const auth =
+      authorize(req);
+
+    if (!auth.ok) {
+      return res
+        .status(auth.status)
+        .json({
+          status: "error",
+          executed: false,
+          engine:
+            "FAWAZ_LIVE_CANDIDATE_V1",
+          message:
+            auth.reason
+        });
+    }
+
+    try {
+      const {
+        side,
+        slotId
+      } =
+        req.body || {};
+
+      const requestedSide =
+        String(
+          side || ""
+        ).toUpperCase();
+
+      const numericSlotId =
+        Number(slotId);
+
+      if (
+        requestedSide !== "BUY" &&
+        requestedSide !== "SELL"
+      ) {
+        return res.status(400).json({
+          status: "error",
+          executed: false,
+          message:
+            "side must be BUY or SELL"
+        });
+      }
+
+      if (
+        !Number.isInteger(
+          numericSlotId
+        ) ||
+        numericSlotId < 1 ||
+        numericSlotId >
+          CONFIG.maxSlots
+      ) {
+        return res.status(400).json({
+          status: "error",
+          executed: false,
+          message:
+            "Invalid slotId"
+        });
+      }
+
+      const analysis =
+        await analyzeSystem(req);
+
+      let result;
+
+      if (
+        requestedSide === "BUY"
+      ) {
+        result =
+          await executeApprovedBuy({
+            req,
+            analysis,
+            requestedSlotId:
+              numericSlotId
+          });
+      }
+
+      if (
+        requestedSide === "SELL"
+      ) {
+        result =
+          await executeApprovedSell({
+            req,
+            analysis,
+            requestedSlotId:
+              numericSlotId
+          });
+      }
+
+      const dashboard =
+        await getTradingDashboard(
+          analysis.walletAddress
+        );
+
+      return res.status(200).json({
+        status:
+          result?.executed === true
+            ? "ok"
+            : "blocked",
+
+        engine:
+          "FAWAZ_LIVE_CANDIDATE_V1",
+
+        realTrading: true,
+
+        executed:
+          result?.executed === true,
+
+        result,
+        dashboard,
+
+        timestamp:
+          new Date().toISOString()
+      });
+
+    } catch (error) {
+      console.error(
+        "Live Execution Error:",
+        error
+      );
+
+      return res.status(500).json({
+        status: "error",
+        engine:
+          "FAWAZ_LIVE_CANDIDATE_V1",
+        realTrading: true,
+        executed: false,
+        message:
+          error?.message ||
+          "Live execution failed",
+        timestamp:
+          new Date().toISOString()
+      });
+    }
+  }
+
+
+  return res.status(405).json({
+    status: "error",
+    engine:
+      "FAWAZ_LIVE_CANDIDATE_V1",
+    message:
+      "GET or POST only"
+  });
+}
