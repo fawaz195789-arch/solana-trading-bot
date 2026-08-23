@@ -1,13 +1,8 @@
 // /api/trade-orchestrator.js
 // FAWAZ AI BOT
-// LIVE CANDIDATE ORCHESTRATOR v1
-//
-// GET  = تحليل فقط - لا ينفذ أموال
-// POST = تنفيذ BUY/SELL حقيقي بعد موافقة مصرح بها
-//
-// Capital = 5 USDC
-// 4 Slots x 1 USDC
-// 1 USDC reserve
+// PAPER SCALPER V1
+// 4 Slots - 5 USDC Capital Simulation
+// NO REAL TRADING
 
 import {
   evaluateRisk,
@@ -17,9 +12,10 @@ import {
 import {
   getOpenPositions,
   getFreeSlot,
-  getOpenPositionBySlot,
   openPosition,
   closePosition,
+  updateHighestPrice,
+  activateTrailing,
   getRecentClosedTrades,
   getTradingDashboard
 } from "./trading-store.js";
@@ -30,24 +26,31 @@ import {
 // ======================================================
 
 const CONFIG = {
-  totalCapitalUsd: 5,
   maxSlots: 4,
-  slotUsd: 1,
-  reserveUsd: 1,
 
+  // كل صفقة = 1 USDC
+  slotUsd: 1,
+
+  // Dynamic targets
   calmTargetBps: 30,
   normalTargetBps: 45,
   fastTargetBps: 70,
 
+  // Stop Loss
   stopLossBps: 45,
 
-  maxSlippageBps: 30,
-  minNetEdgeBps: 12
+  // Trailing Profit
+  trailingActivationRatio: 0.65,
+  trailingDistanceRatio: 0.30,
+
+  // Risk
+  minNetEdgeBps: 12,
+
+  // محاكاة تكلفة الانزلاق
+  estimatedSlippageBps: 6,
+
+  maxEntriesPerCycle: 1
 };
-
-
-const SOL_DECIMALS = 9;
-const USDC_DECIMALS = 6;
 
 
 // ======================================================
@@ -87,20 +90,6 @@ function toBps(value) {
 }
 
 
-function atomicToAmount(
-  value,
-  decimals
-) {
-  return (
-    num(value) /
-    Math.pow(
-      10,
-      decimals
-    )
-  );
-}
-
-
 // ======================================================
 // WALLET
 // ======================================================
@@ -119,46 +108,6 @@ function getWalletAddress() {
   }
 
   return wallet.trim();
-}
-
-
-// ======================================================
-// AUTH
-// ======================================================
-
-function authorize(req) {
-  const secret =
-    process.env.AUTO_TRADER_SECRET;
-
-  if (!secret) {
-    return {
-      ok: false,
-      status: 500,
-      reason:
-        "AUTO_TRADER_SECRET_MISSING"
-    };
-  }
-
-  const auth =
-    req.headers.authorization ||
-    req.headers.Authorization ||
-    "";
-
-  if (
-    auth !==
-    `Bearer ${secret}`
-  ) {
-    return {
-      ok: false,
-      status: 401,
-      reason:
-        "UNAUTHORIZED"
-    };
-  }
-
-  return {
-    ok: true
-  };
 }
 
 
@@ -200,9 +149,7 @@ function getBaseUrl(req) {
 
   if (host) {
     const protocol =
-      host.includes(
-        "localhost"
-      )
+      host.includes("localhost")
         ? "http"
         : "https";
 
@@ -219,14 +166,18 @@ function getBaseUrl(req) {
 // FETCH JSON
 // ======================================================
 
-async function fetchJson(
-  url,
-  options = {}
-) {
+async function fetchJson(url) {
   const response =
     await fetch(
       url,
-      options
+      {
+        method: "GET",
+
+        headers: {
+          Accept:
+            "application/json"
+        }
+      }
     );
 
   const text =
@@ -257,8 +208,6 @@ async function fetchJson(
 
 // ======================================================
 // LOAD SIGNAL
-// IMPORTANT:
-// نرجع الرد كامل حتى نقرأ signal + market
 // ======================================================
 
 async function loadSignal(req) {
@@ -267,15 +216,7 @@ async function loadSignal(req) {
 
   const data =
     await fetchJson(
-      `${baseUrl}/api/signal`,
-      {
-        method: "GET",
-
-        headers: {
-          Accept:
-            "application/json"
-        }
-      }
+      `${baseUrl}/api/signal`
     );
 
   if (
@@ -287,69 +228,12 @@ async function loadSignal(req) {
     );
   }
 
-  // مهم:
-  // لا نرجع data.signal فقط
-  return data;
+  return data.signal;
 }
 
 
 // ======================================================
-// EXECUTION AGENT
-// ======================================================
-
-async function executeTrade({
-  req,
-  side,
-  slotId,
-  amountUsd = 0,
-  amountSol = 0,
-  slippageBps = 20
-}) {
-  const baseUrl =
-    getBaseUrl(req);
-
-  const secret =
-    process.env.AUTO_TRADER_SECRET;
-
-  return await fetchJson(
-    `${baseUrl}/api/execution-agent`,
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type":
-          "application/json",
-
-        Authorization:
-          `Bearer ${secret}`
-      },
-
-      body:
-        JSON.stringify({
-          side,
-          slotId,
-          amountUsd,
-          amountSol,
-
-          slippageBps:
-            clamp(
-              Math.floor(
-                num(
-                  slippageBps,
-                  20
-                )
-              ),
-              1,
-              CONFIG.maxSlippageBps
-            )
-        })
-    }
-  );
-}
-
-
-// ======================================================
-// TARGET
+// DYNAMIC TARGET
 // ======================================================
 
 function getDynamicTarget(
@@ -403,80 +287,44 @@ function getDynamicTarget(
 
 
 // ======================================================
-// CAPITAL
+// MANAGE OPEN POSITIONS
 // ======================================================
 
-function calculateCapital(
-  positions
-) {
-  const used =
-    positions.reduce(
-      (
-        total,
-        position
-      ) =>
-        total +
-        num(
-          position.entry_usdc
-        ),
-      0
-    );
-
-  const free =
-    Math.max(
-      0,
-      CONFIG.totalCapitalUsd -
-      used
-    );
-
-  return {
-    total:
-      CONFIG.totalCapitalUsd,
-
-    slotSize:
-      CONFIG.slotUsd,
-
-    reserve:
-      CONFIG.reserveUsd,
-
-    used,
-
-    free,
-
-    availableForTrading:
-      Math.max(
-        0,
-        free -
-        CONFIG.reserveUsd
-      )
-  };
-}
-
-
-// ======================================================
-// SELL CANDIDATES
-// ======================================================
-
-function buildSellCandidates({
+async function managePositions({
   positions,
   currentPrice
 }) {
-  const candidates = [];
+  const events = [];
+
 
   for (
     const position
     of positions
   ) {
+
     const entryPrice =
       num(
         position.entry_price
       );
 
+
     if (
       entryPrice <= 0
     ) {
+      events.push({
+        slotId:
+          position.slot_id,
+
+        action:
+          "ERROR",
+
+        reason:
+          "INVALID_ENTRY_PRICE"
+      });
+
       continue;
     }
+
 
     const pnlBps =
       toBps(
@@ -487,90 +335,351 @@ function buildSellCandidates({
         entryPrice
       );
 
+
+    let highestPrice =
+      num(
+        position.highest_price,
+        entryPrice
+      );
+
+
+    // ==================================================
+    // UPDATE HIGH
+    // ==================================================
+
+    if (
+      currentPrice >
+      highestPrice
+    ) {
+      highestPrice =
+        currentPrice;
+
+      await updateHighestPrice({
+        id:
+          position.id,
+
+        highestPrice
+      });
+    }
+
+
     const targetBps =
       num(
         position.target_bps,
         CONFIG.normalTargetBps
       );
 
-    let reason = null;
+
+    // ==================================================
+    // STOP LOSS
+    // ==================================================
 
     if (
       pnlBps <=
       -CONFIG.stopLossBps
     ) {
-      reason =
-        "STOP_LOSS";
-    }
 
-    if (
-      pnlBps >=
-      targetBps
-    ) {
-      reason =
-        "PROFIT_TARGET";
-    }
+      const exitUsdc =
+        num(
+          position.entry_usdc
+        ) *
+        (
+          1 +
+          pnlBps /
+          10000
+        );
 
-    if (!reason) {
+
+      const closed =
+        await closePosition({
+          id:
+            position.id,
+
+          exitPrice:
+            currentPrice,
+
+          exitUsdc,
+
+          signature:
+            "PAPER_SELL",
+
+          reason:
+            "PAPER_STOP_LOSS"
+        });
+
+
+      events.push({
+        slotId:
+          position.slot_id,
+
+        action:
+          "SELL",
+
+        reason:
+          "STOP_LOSS",
+
+        pnlPct:
+          closed
+            .realized_pnl_pct
+      });
+
+
       continue;
     }
 
-    candidates.push({
-      candidateId:
-        crypto.randomUUID(),
 
-      side:
-        "SELL",
+    // ==================================================
+    // TRAILING ACTIVATION
+    // ==================================================
 
-      slotId:
-        Number(
-          position.slot_id
-        ),
+    const activationBps =
+      targetBps *
+      CONFIG
+        .trailingActivationRatio;
 
-      positionId:
-        Number(
-          position.id
-        ),
 
-      amountSol:
+    let trailingActive =
+      position
+        .trailing_active === true;
+
+
+    if (
+      !trailingActive &&
+      pnlBps >=
+        activationBps
+    ) {
+
+      await activateTrailing({
+        id:
+          position.id,
+
+        highestPrice
+      });
+
+
+      trailingActive =
+        true;
+
+
+      events.push({
+        slotId:
+          position.slot_id,
+
+        action:
+          "TRAILING_ON",
+
+        reason:
+          "PROFIT_PROTECTION",
+
+        pnlBps:
+          Number(
+            pnlBps.toFixed(2)
+          )
+      });
+    }
+
+
+    // ==================================================
+    // TRAILING EXIT
+    // ==================================================
+
+    if (
+      trailingActive
+    ) {
+
+      const distanceBps =
         num(
-          position.entry_sol
-        ),
+          position
+            .trailing_distance_bps,
 
-      entryPrice,
+          Math.max(
+            8,
 
-      currentPrice,
+            targetBps *
+            CONFIG
+              .trailingDistanceRatio
+          )
+        );
+
+
+      const dropBps =
+        highestPrice > 0
+          ? toBps(
+              (
+                highestPrice -
+                currentPrice
+              ) /
+              highestPrice
+            )
+          : 0;
+
+
+      if (
+        dropBps >=
+        distanceBps
+      ) {
+
+        const pnlPct =
+          (
+            currentPrice -
+            entryPrice
+          ) /
+          entryPrice;
+
+
+        const exitUsdc =
+          num(
+            position.entry_usdc
+          ) *
+          (
+            1 +
+            pnlPct
+          );
+
+
+        const closed =
+          await closePosition({
+            id:
+              position.id,
+
+            exitPrice:
+              currentPrice,
+
+            exitUsdc,
+
+            signature:
+              "PAPER_SELL",
+
+            reason:
+              "PAPER_TRAILING"
+          });
+
+
+        events.push({
+          slotId:
+            position.slot_id,
+
+          action:
+            "SELL",
+
+          reason:
+            "TRAILING_PROFIT",
+
+          pnlPct:
+            closed
+              .realized_pnl_pct
+        });
+
+
+        continue;
+      }
+    }
+
+
+    // ==================================================
+    // HARD TARGET
+    // ==================================================
+
+    if (
+      pnlBps >=
+      targetBps * 1.40
+    ) {
+
+      const pnlPct =
+        (
+          currentPrice -
+          entryPrice
+        ) /
+        entryPrice;
+
+
+      const exitUsdc =
+        num(
+          position.entry_usdc
+        ) *
+        (
+          1 +
+          pnlPct
+        );
+
+
+      const closed =
+        await closePosition({
+          id:
+            position.id,
+
+          exitPrice:
+            currentPrice,
+
+          exitUsdc,
+
+          signature:
+            "PAPER_SELL",
+
+          reason:
+            "PAPER_TARGET"
+        });
+
+
+      events.push({
+        slotId:
+          position.slot_id,
+
+        action:
+          "SELL",
+
+        reason:
+          "TARGET_PROFIT",
+
+        pnlPct:
+          closed
+            .realized_pnl_pct
+      });
+
+
+      continue;
+    }
+
+
+    // ==================================================
+    // KEEP OPEN
+    // ==================================================
+
+    events.push({
+      slotId:
+        position.slot_id,
+
+      action:
+        "HOLD",
+
+      reason:
+        "KEEP_OPEN",
 
       pnlBps:
         Number(
           pnlBps.toFixed(2)
-        ),
-
-      targetBps,
-
-      reason,
-
-      createdAt:
-        new Date()
-          .toISOString()
+        )
     });
   }
 
-  return candidates;
+
+  return events;
 }
 
 
 // ======================================================
-// BUY CANDIDATE
+// TRY PAPER ENTRY
 // ======================================================
 
-async function buildBuyCandidate({
+async function tryPaperEntry({
   walletAddress,
+  signal,
   positions,
   recentTrades,
-  signal,
-  riskMode
+  targetBps,
+  currentPrice
 }) {
+
   if (
     String(
       signal.action ||
@@ -578,52 +687,44 @@ async function buildBuyCandidate({
     ).toUpperCase() !==
     "BUY"
   ) {
-    return null;
+    return {
+      opened: false,
+
+      reason:
+        "NO_BUY_SIGNAL"
+    };
   }
 
-  const freeSlot =
+
+  // ====================================================
+  // FIND FREE SLOT
+  // ====================================================
+
+  const slotId =
     await getFreeSlot(
       walletAddress,
       CONFIG.maxSlots
     );
 
-  if (!freeSlot) {
-    return null;
+
+  if (!slotId) {
+    return {
+      opened: false,
+
+      reason:
+        "NO_FREE_SLOT"
+    };
   }
 
-  const capital =
-    calculateCapital(
-      positions
-    );
 
-  if (
-    capital
-      .availableForTrading <
-    CONFIG.slotUsd
-  ) {
-    return null;
-  }
+  // ====================================================
+  // RISK STATE
+  // ====================================================
 
-  const targetBps =
-    getDynamicTarget(
-      signal,
-      riskMode
-    );
+  const riskState = {
 
-  const estimatedSlippageBps =
-    Math.max(
-      4,
-
-      Math.ceil(
-        num(
-          signal.spreadBps
-        ) / 2
-      )
-    );
-
-  const state = {
-    totalCapitalUsd:
-      CONFIG.totalCapitalUsd,
+    // رأس المال الكلي = 5 USDC
+    totalCapitalUsd: 5,
 
     recentTrades,
 
@@ -644,22 +745,38 @@ async function buildBuyCandidate({
       )
   };
 
+
+  // ====================================================
+  // CANDIDATE
+  // ====================================================
+
   const candidate = {
+
+    // كل Slot = 1 USDC
     amountUsd:
       CONFIG.slotUsd,
 
     expectedMoveBps:
       targetBps,
 
-    estimatedSlippageBps,
+    estimatedSlippageBps:
+      CONFIG
+        .estimatedSlippageBps,
 
     buyFeeBps: 0,
+
     sellFeeBps: 0
   };
 
+
+  // ====================================================
+  // RISK AGENT
+  // ====================================================
+
   const risk =
     evaluateRisk({
-      state,
+      state:
+        riskState,
 
       candidate,
 
@@ -667,296 +784,38 @@ async function buildBuyCandidate({
         maxOpenSlots:
           CONFIG.maxSlots,
 
-        maxSlippageBps:
-          CONFIG.maxSlippageBps,
-
         minNetEdgeBps:
           CONFIG.minNetEdgeBps
       }
     });
 
+
   if (
     !risk.allowed
   ) {
     return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      slotId:
-        freeSlot,
-
-      approved:
-        false,
+      opened: false,
 
       reason:
         risk.reason,
 
-      amountUsd:
-        CONFIG.slotUsd,
-
-      targetBps,
-
-      risk,
-
-      createdAt:
-        new Date()
-          .toISOString()
+      risk
     };
   }
 
-  return {
-    candidateId:
-      crypto.randomUUID(),
 
-    signalId:
-      signal.signalId ||
-      null,
+  // ====================================================
+  // PAPER BUY
+  // ====================================================
 
-    side:
-      "BUY",
-
-    slotId:
-      freeSlot,
-
-    approved:
-      true,
-
-    amountUsd:
-      CONFIG.slotUsd,
-
-    currentPrice:
-      num(
-        signal.currentPrice
-      ),
-
-    confidence:
-      num(
-        signal.confidence
-      ),
-
-    targetBps,
-
-    estimatedSlippageBps,
-
-    netEdgeBps:
-      risk?.edge
-        ?.netEdgeBps ??
-      null,
-
-    reason:
-      signal.reason,
-
-    createdAt:
-      new Date()
-        .toISOString()
-  };
-}
+  const entryUsdc =
+    CONFIG.slotUsd;
 
 
-// ======================================================
-// ANALYZE SYSTEM
-// FIXED CURRENT PRICE
-// ======================================================
-
-async function analyzeSystem(req) {
-  const walletAddress =
-    getWalletAddress();
-
-  // الآن هذا هو الرد الكامل من /api/signal
-  const signalData =
-    await loadSignal(req);
-
-  const signal =
-    signalData?.signal ||
-    {};
-
-  // الإصلاح:
-  // ندعم السعر داخل signal أو market
-  const currentPrice =
-    num(
-      signal?.currentPrice ||
-      signal?.price ||
-      signalData?.market?.price
-    );
-
-  if (
-    currentPrice <= 0
-  ) {
-    throw new Error(
-      "INVALID_CURRENT_PRICE"
-    );
-  }
-
-  // نخلي السعر متوفر دائمًا داخل signal
-  signal.currentPrice =
+  const entrySol =
+    entryUsdc /
     currentPrice;
 
-  const [
-    positions,
-    recentTrades
-  ] =
-    await Promise.all([
-      getOpenPositions(
-        walletAddress
-      ),
-
-      getRecentClosedTrades(
-        walletAddress,
-        20
-      )
-    ]);
-
-  const riskMode =
-    getDynamicRiskMode(
-      recentTrades
-    );
-
-  const capital =
-    calculateCapital(
-      positions
-    );
-
-  const buyCandidate =
-    await buildBuyCandidate({
-      walletAddress,
-      positions,
-      recentTrades,
-      signal,
-      riskMode
-    });
-
-  const sellCandidates =
-    buildSellCandidates({
-      positions,
-      currentPrice
-    });
-
-  const dashboard =
-    await getTradingDashboard(
-      walletAddress
-    );
-
-  return {
-    walletAddress,
-    signalData,
-    signal,
-    currentPrice,
-    positions,
-    recentTrades,
-    riskMode,
-    capital,
-    buyCandidate,
-    sellCandidates,
-    dashboard
-  };
-}
-
-
-// ======================================================
-// EXECUTE BUY
-// ======================================================
-
-async function executeApprovedBuy({
-  req,
-  analysis,
-  requestedSlotId
-}) {
-  const candidate =
-    analysis.buyCandidate;
-
-  if (
-    !candidate ||
-    candidate.approved !== true
-  ) {
-    throw new Error(
-      "NO_APPROVED_BUY_CANDIDATE"
-    );
-  }
-
-  if (
-    Number(
-      requestedSlotId
-    ) !==
-    Number(
-      candidate.slotId
-    )
-  ) {
-    throw new Error(
-      "BUY_SLOT_CHANGED"
-    );
-  }
-
-  const existing =
-    await getOpenPositionBySlot(
-      analysis.walletAddress,
-      candidate.slotId
-    );
-
-  if (existing) {
-    throw new Error(
-      "SLOT_ALREADY_OPEN"
-    );
-  }
-
-  const execution =
-    await executeTrade({
-      req,
-
-      side:
-        "BUY",
-
-      slotId:
-        candidate.slotId,
-
-      amountUsd:
-        CONFIG.slotUsd,
-
-      slippageBps:
-        candidate
-          .estimatedSlippageBps
-    });
-
-  if (
-    execution?.executed !==
-    true
-  ) {
-    return {
-      executed: false,
-
-      reason:
-        execution?.reason ||
-        "BUY_NOT_EXECUTED",
-
-      execution
-    };
-  }
-
-  const solReceived =
-    atomicToAmount(
-      execution
-        ?.quote
-        ?.outAmount,
-
-      SOL_DECIMALS
-    );
-
-  if (
-    solReceived <= 0
-  ) {
-    throw new Error(
-      "INVALID_SOL_RECEIVED"
-    );
-  }
-
-  const actualEntryPrice =
-    CONFIG.slotUsd /
-    solReceived;
-
-  const targetBps =
-    candidate.targetBps;
 
   const trailingDistanceBps =
     Math.max(
@@ -964,220 +823,78 @@ async function executeApprovedBuy({
 
       Math.round(
         targetBps *
-        0.30
+        CONFIG
+          .trailingDistanceRatio
       )
     );
 
-  const saved =
-    await openPosition({
-      walletAddress:
-        analysis.walletAddress,
 
-      slotId:
-        candidate.slotId,
+  const position =
+    await openPosition({
+      walletAddress,
+
+      slotId,
 
       entryPrice:
-        actualEntryPrice,
+        currentPrice,
 
-      entrySol:
-        solReceived,
+      entrySol,
 
-      entryUsdc:
-        CONFIG.slotUsd,
+      entryUsdc,
 
       signature:
-        execution.signature,
+        "PAPER_BUY",
 
       strategy:
-        "LIVE_MICRO_SCALP",
+        "PAPER_MICRO_SCALP",
 
       targetBps,
 
       trailingDistanceBps
     });
 
-  return {
-    executed: true,
-
-    side:
-      "BUY",
-
-    slotId:
-      candidate.slotId,
-
-    amountUsd:
-      CONFIG.slotUsd,
-
-    solReceived,
-
-    actualEntryPrice,
-
-    signature:
-      execution.signature,
-
-    position:
-      saved
-  };
-}
-
-
-// ======================================================
-// EXECUTE SELL
-// ======================================================
-
-async function executeApprovedSell({
-  req,
-  analysis,
-  requestedSlotId
-}) {
-  const slotId =
-    Number(
-      requestedSlotId
-    );
-
-  const candidate =
-    analysis
-      .sellCandidates
-      .find(
-        (item) =>
-          Number(
-            item.slotId
-          ) === slotId
-      );
-
-  if (!candidate) {
-    throw new Error(
-      "NO_APPROVED_SELL_CANDIDATE"
-    );
-  }
-
-  const position =
-    await getOpenPositionBySlot(
-      analysis.walletAddress,
-      slotId
-    );
-
-  if (!position) {
-    throw new Error(
-      "OPEN_POSITION_NOT_FOUND"
-    );
-  }
-
-  const amountSol =
-    num(
-      position.entry_sol
-    );
-
-  if (
-    amountSol <= 0
-  ) {
-    throw new Error(
-      "INVALID_POSITION_SOL_AMOUNT"
-    );
-  }
-
-  const execution =
-    await executeTrade({
-      req,
-
-      side:
-        "SELL",
-
-      slotId,
-
-      amountSol,
-
-      slippageBps:
-        CONFIG.maxSlippageBps
-    });
-
-  if (
-    execution?.executed !==
-    true
-  ) {
-    return {
-      executed: false,
-
-      side:
-        "SELL",
-
-      slotId,
-
-      reason:
-        execution?.reason ||
-        "SELL_NOT_EXECUTED",
-
-      execution
-    };
-  }
-
-  const usdcReceived =
-    atomicToAmount(
-      execution
-        ?.quote
-        ?.outAmount,
-
-      USDC_DECIMALS
-    );
-
-  if (
-    usdcReceived <= 0
-  ) {
-    throw new Error(
-      "INVALID_USDC_RECEIVED"
-    );
-  }
-
-  const closed =
-    await closePosition({
-      id:
-        position.id,
-
-      exitPrice:
-        analysis.currentPrice,
-
-      exitUsdc:
-        usdcReceived,
-
-      signature:
-        execution.signature,
-
-      reason:
-        candidate.reason
-    });
 
   return {
-    executed: true,
+    opened: true,
 
-    side:
-      "SELL",
+    paper: true,
 
     slotId,
 
-    amountSol,
+    positionId:
+      position.id,
 
-    usdcReceived,
+    entryPrice:
+      currentPrice,
 
-    reason:
-      candidate.reason,
+    entryUsdc,
 
-    signature:
-      execution.signature,
+    entrySol,
 
-    pnl:
-      closed.realized_pnl,
+    targetBps,
 
-    pnlPct:
-      closed.realized_pnl_pct,
-
-    position:
-      closed
+    remainingCapital:
+      5 -
+      (
+        positions.reduce(
+          (
+            total,
+            item
+          ) =>
+            total +
+            num(
+              item.entry_usdc
+            ),
+          0
+        ) +
+        entryUsdc
+      )
   };
 }
 
 
 // ======================================================
-// MAIN HANDLER
+// MAIN
 // ======================================================
 
 export default async function handler(
@@ -1185,315 +902,315 @@ export default async function handler(
   res
 ) {
 
-  // ====================================================
-  // GET = ANALYSIS ONLY
-  // لا ينفذ أي صفقة
-  // ====================================================
+  if (
+    req.method !== "GET" &&
+    req.method !== "POST"
+  ) {
+    return res
+      .status(405)
+      .json({
+        status: "error",
 
-  if (req.method === "GET") {
-    try {
-
-      const analysis =
-        await analyzeSystem(req);
-
-      return res
-        .status(200)
-        .json({
-          status: "ok",
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          liveMarket: true,
-
-          realTrading: true,
-
-          execution:
-            "APPROVAL_REQUIRED",
-
-          walletAddress:
-            analysis.walletAddress,
-
-          capital:
-            analysis.capital,
-
-          signal: {
-            signalId:
-              analysis.signal.signalId ||
-              null,
-
-            action:
-              analysis.signal.action ||
-              "WAIT",
-
-            confidence:
-              num(
-                analysis.signal.confidence
-              ),
-
-            reason:
-              analysis.signal.reason ||
-              "-",
-
-            currentPrice:
-              analysis.currentPrice,
-
-            marketMode:
-              analysis.signal.marketMode ||
-              "-",
-
-            scalpingScore:
-              num(
-                analysis.signal.scalpingScore
-              ),
-
-            spreadBps:
-              num(
-                analysis.signal.spreadBps
-              ),
-
-            volatilityBps:
-              num(
-                analysis.signal.volatilityBps
-              ),
-
-            direction:
-              analysis.signal.direction ||
-              "-"
-          },
-
-          riskMode:
-            analysis.riskMode,
-
-          buyCandidate:
-            analysis.buyCandidate,
-
-          sellCandidates:
-            analysis.sellCandidates,
-
-          dashboard:
-            analysis.dashboard,
-
-          timestamp:
-            new Date().toISOString()
-        });
-
-    } catch (error) {
-
-      console.error(
-        "Live Analysis Error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          status: "error",
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          message:
-            error?.message ||
-            "Live analysis failed",
-
-          timestamp:
-            new Date().toISOString()
-        });
-    }
+        message:
+          "GET or POST only"
+      });
   }
 
 
-  // ====================================================
-  // POST = REAL EXECUTION AFTER APPROVAL
-  // ====================================================
+  try {
 
-  if (req.method === "POST") {
+    // ==================================================
+    // WALLET
+    // ==================================================
 
-    const auth =
-      authorize(req);
-
-    if (!auth.ok) {
-      return res
-        .status(auth.status)
-        .json({
-          status: "error",
-
-          executed: false,
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          message:
-            auth.reason
-        });
-    }
+    const walletAddress =
+      getWalletAddress();
 
 
-    try {
+    // ==================================================
+    // SIGNAL
+    // ==================================================
 
-      const {
-        side,
-        slotId
-      } =
-        req.body || {};
-
-
-      const requestedSide =
-        String(
-          side || ""
-        ).toUpperCase();
+    const signal =
+      await loadSignal(req);
 
 
-      const numericSlotId =
-        Number(slotId);
-
-
-      if (
-        requestedSide !== "BUY" &&
-        requestedSide !== "SELL"
-      ) {
-        return res
-          .status(400)
-          .json({
-            status: "error",
-
-            executed: false,
-
-            message:
-              "side must be BUY or SELL"
-          });
-      }
-
-
-      if (
-        !Number.isInteger(
-          numericSlotId
-        ) ||
-        numericSlotId < 1 ||
-        numericSlotId >
-          CONFIG.maxSlots
-      ) {
-        return res
-          .status(400)
-          .json({
-            status: "error",
-
-            executed: false,
-
-            message:
-              "Invalid slotId"
-          });
-      }
-
-
-      // نعيد التحليل قبل التنفيذ
-      const analysis =
-        await analyzeSystem(req);
-
-
-      let result;
-
-
-      if (
-        requestedSide === "BUY"
-      ) {
-        result =
-          await executeApprovedBuy({
-            req,
-
-            analysis,
-
-            requestedSlotId:
-              numericSlotId
-          });
-      }
-
-
-      if (
-        requestedSide === "SELL"
-      ) {
-        result =
-          await executeApprovedSell({
-            req,
-
-            analysis,
-
-            requestedSlotId:
-              numericSlotId
-          });
-      }
-
-
-      const dashboard =
-        await getTradingDashboard(
-          analysis.walletAddress
-        );
-
-
-      return res
-        .status(200)
-        .json({
-          status:
-            result?.executed === true
-              ? "ok"
-              : "blocked",
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          realTrading: true,
-
-          executed:
-            result?.executed === true,
-
-          result,
-
-          dashboard,
-
-          timestamp:
-            new Date().toISOString()
-        });
-
-    } catch (error) {
-
-      console.error(
-        "Live Execution Error:",
-        error
+    const currentPrice =
+      num(
+        signal.currentPrice
       );
 
-      return res
-        .status(500)
-        .json({
-          status: "error",
 
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          realTrading: true,
-
-          executed: false,
-
-          message:
-            error?.message ||
-            "Live execution failed",
-
-          timestamp:
-            new Date().toISOString()
-        });
+    if (
+      currentPrice <= 0
+    ) {
+      throw new Error(
+        "INVALID_CURRENT_PRICE"
+      );
     }
-  }
+
+
+    // ==================================================
+    // DATABASE
+    // ==================================================
+
+    const [
+      positionsBefore,
+      recentTrades
+    ] =
+      await Promise.all([
+
+        getOpenPositions(
+          walletAddress
+        ),
+
+        getRecentClosedTrades(
+          walletAddress,
+          20
+        )
+
+      ]);
+
+
+    // ==================================================
+    // RISK MODE
+    // ==================================================
+
+    const riskMode =
+      getDynamicRiskMode(
+        recentTrades
+      );
+
+
+    // ==================================================
+    // DYNAMIC TARGET
+    // ==================================================
+
+    const targetBps =
+      getDynamicTarget(
+        signal,
+        riskMode
+      );
+
+
+    // ==================================================
+    // MANAGE EXISTING SLOTS
+    // ==================================================
+
+    const positionEvents =
+      await managePositions({
+        positions:
+          positionsBefore,
+
+        currentPrice
+      });
+
+
+    // ==================================================
+    // RELOAD AFTER EXITS
+    // ==================================================
+
+    const positionsAfterExit =
+      await getOpenPositions(
+        walletAddress
+      );
+
+
+    // ==================================================
+    // TRY NEW ENTRY
+    // ==================================================
+
+    const entryResult =
+      await tryPaperEntry({
+        walletAddress,
+
+        signal,
+
+        positions:
+          positionsAfterExit,
+
+        recentTrades,
+
+        targetBps,
+
+        currentPrice
+      });
+
+
+    // ==================================================
+    // DASHBOARD
+    // ==================================================
+
+    const dashboard =
+      await getTradingDashboard(
+        walletAddress
+      );
+
+
+    // ==================================================
+    // CAPITAL STATS
+    // ==================================================
+
+    const openPositions =
+      Array.isArray(
+        dashboard.openPositions
+      )
+        ? dashboard.openPositions
+        : [];
+
+
+    const usedCapital =
+      openPositions.reduce(
+        (
+          total,
+          position
+        ) =>
+          total +
+          num(
+            position.entry_usdc
+          ),
+        0
+      );
+
+
+    const totalCapital =
+      5;
+
+
+    const freeCapital =
+      Math.max(
+        0,
+        totalCapital -
+        usedCapital
+      );
+
+
+    const realizedPnl =
+      num(
+        dashboard
+          ?.allTime
+          ?.pnl
+      );
+
+
+    const returnPct =
+      (
+        realizedPnl /
+        totalCapital
+      ) *
+      100;
+
+
+    // ==================================================
+    // RESPONSE
+    // ==================================================
+
+    return res
+      .status(200)
+      .json({
+        status: "ok",
+
+        engine:
+          "FAWAZ_PAPER_SCALPER_V1",
+
+        paperTrading:
+          true,
+
+        realTrading:
+          false,
+
+        walletAddress,
+
+        capital: {
+          total:
+            totalCapital,
+
+          slotSize:
+            CONFIG.slotUsd,
+
+          maxSlots:
+            CONFIG.maxSlots,
+
+          used:
+            usedCapital,
+
+          free:
+            freeCapital,
+
+          realizedPnl,
+
+          returnPct:
+            Number(
+              returnPct.toFixed(
+                4
+              )
+            )
+        },
+
+        signal: {
+          action:
+            signal.action,
+
+          confidence:
+            signal.confidence,
+
+          reason:
+            signal.reason,
+
+          currentPrice,
+
+          marketMode:
+            signal.marketMode,
+
+          scalpingScore:
+            signal.scalpingScore
+        },
+
+        riskMode,
+
+        targetBps,
+
+        positionEvents,
+
+        entryResult,
+
+        dashboard,
+
+        timestamp:
+          new Date()
+            .toISOString()
+      });
+
+
+  } catch (error) {
+
+    console.error(
+      "Paper Scalper Error:",
+      error
+    );
 
 
     return res
-    .status(405)
-    .json({
-      status: "error",
+      .status(500)
+      .json({
+        status: "error",
 
-      engine:
-        "FAWAZ_LIVE_CANDIDATE_V1",
+        engine:
+          "FAWAZ_PAPER_SCALPER_V1",
 
-      message:
-        "GET or POST only"
-    });
+        paperTrading:
+          true,
+
+        realTrading:
+          false,
+
+        message:
+          error?.message ||
+          "Paper scalper failed",
+
+        timestamp:
+          new Date()
+            .toISOString()
+      });
+  }
 }
