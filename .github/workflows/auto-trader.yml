@@ -14,24 +14,108 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  run-trader:
+  trade:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Run automatic trading cycle
+      - name: Analyze and execute approved candidate
         env:
           AUTO_TRADER_SECRET: ${{ secrets.AUTO_TRADER_SECRET }}
 
         run: |
-          curl --silent --show-error --fail-with-body \
+          set -euo pipefail
+
+          BASE_URL="https://fawaz-ai-bot.vercel.app"
+
+          echo "Analyzing market..."
+
+          ANALYSIS=$(curl \
+            --silent \
+            --show-error \
+            --fail-with-body \
             --connect-timeout 15 \
             --max-time 50 \
             --retry 2 \
-            -X POST \
-            -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
-            -H "Content-Type: application/json" \
             -H "Accept: application/json" \
-            --data '{
-              "walletAddress":"3jDHDWej98HoeAD3aYcahy1BuShKfREssnMGLYpHGski"
-            }' \
-            "https://fawaz-ai-bot.vercel.app/api/trade-orchestrator"
+            "$BASE_URL/api/trade-orchestrator")
+
+          echo "$ANALYSIS" | jq .
+
+          STATUS=$(echo "$ANALYSIS" | jq -r '.status // "error"')
+          ENGINE=$(echo "$ANALYSIS" | jq -r '.engine // ""')
+
+          if [ "$STATUS" != "ok" ]; then
+            echo "Analysis failed."
+            exit 1
+          fi
+
+          if [ "$ENGINE" != "FAWAZ_LIVE_CANDIDATE_V1" ]; then
+            echo "Wrong engine: $ENGINE"
+            exit 1
+          fi
+
+          # ============================================
+          # SELL FIRST
+          # ============================================
+
+          SELL_COUNT=$(echo "$ANALYSIS" | jq '.sellCandidates | length')
+
+          if [ "$SELL_COUNT" -gt 0 ]; then
+
+            SELL_SLOT=$(echo "$ANALYSIS" | jq -r '.sellCandidates[0].slotId')
+
+            echo "Approved SELL candidate found on Slot $SELL_SLOT"
+
+            curl \
+              --silent \
+              --show-error \
+              --fail-with-body \
+              --connect-timeout 15 \
+              --max-time 50 \
+              --retry 1 \
+              -X POST \
+              -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              --data "{
+                \"side\":\"SELL\",
+                \"slotId\":${SELL_SLOT}
+              }" \
+              "$BASE_URL/api/trade-orchestrator"
+
+            exit 0
+          fi
+
+          # ============================================
+          # BUY
+          # ============================================
+
+          BUY_APPROVED=$(echo "$ANALYSIS" | jq -r '.buyCandidate.approved // false')
+
+          if [ "$BUY_APPROVED" = "true" ]; then
+
+            BUY_SLOT=$(echo "$ANALYSIS" | jq -r '.buyCandidate.slotId')
+
+            echo "Approved BUY candidate found on Slot $BUY_SLOT"
+
+            curl \
+              --silent \
+              --show-error \
+              --fail-with-body \
+              --connect-timeout 15 \
+              --max-time 50 \
+              --retry 1 \
+              -X POST \
+              -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              --data "{
+                \"side\":\"BUY\",
+                \"slotId\":${BUY_SLOT}
+              }" \
+              "$BASE_URL/api/trade-orchestrator"
+
+            exit 0
+          fi
+
+          echo "No approved trade candidate. Waiting for next cycle."
