@@ -1,10 +1,12 @@
-import {
+import * as tradingStore from "../lib/trading-store.js";
+
+const {
   getOpenPosition,
   openPosition,
   closePosition,
   get24HourStats,
   getAllTimeStats
-} from "../lib/trading-store.js";
+} = tradingStore;
 
 const USDC_MINT =
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
