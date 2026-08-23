@@ -2,18 +2,12 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 const RPC_URL = "https://api.mainnet-beta.solana.com";
-const JUPITER_BASE_URL = "https://api.jup.ag/swap/v2";
 
-const MAX_BUY_USDC = 0.5;
-const MAX_SELL_SOL = 0.005;
+const BUY_USDC_AMOUNT = 0.5;
+const SELL_SOL_AMOUNT = 0.005;
+
 const SOL_FLOOR = 0.1;
-const SOL_REBALANCE_LEVEL = 0.105;
-
-function jupiterHeaders() {
-  return process.env.JUPITER_API_KEY
-    ? { "x-api-key": process.env.JUPITER_API_KEY }
-    : {};
-}
+const MIN_USDC_TO_BUY = 0.55;
 
 async function getMarketData() {
   const response = await fetch(
@@ -28,24 +22,19 @@ async function getMarketData() {
     !Array.isArray(result.data) ||
     result.data.length < 30
   ) {
-    throw new Error("Failed to load OKX market candles");
+    throw new Error("Failed to load market candles");
   }
 
   const closes = [...result.data]
     .reverse()
-    .map(candle => Number(candle[4]))
+    .map((candle) => Number(candle[4]))
     .filter(Number.isFinite);
 
   if (closes.length < 30) {
-    throw new Error("Not enough valid market candles");
+    throw new Error("Not enough valid candles");
   }
 
   const currentPrice = closes[closes.length - 1];
-  const previousPrice = closes[closes.length - 6];
-
-  if (!currentPrice || !previousPrice) {
-    throw new Error("Invalid market prices");
-  }
 
   const sma10 =
     closes.slice(-10).reduce((a, b) => a + b, 0) / 10;
@@ -53,37 +42,28 @@ async function getMarketData() {
   const sma30 =
     closes.slice(-30).reduce((a, b) => a + b, 0) / 30;
 
+  const fiveCandlesAgo =
+    closes[closes.length - 6];
+
   const momentum =
-    ((currentPrice - previousPrice) / previousPrice) * 100;
-
-  const recentCloses = closes.slice(-12);
-  const changes = [];
-
-  for (let i = 1; i < recentCloses.length; i++) {
-    const previous = recentCloses[i - 1];
-    const current = recentCloses[i];
-
-    changes.push(
-      Math.abs(((current - previous) / previous) * 100)
-    );
-  }
-
-  const volatility =
-    changes.reduce((a, b) => a + b, 0) / changes.length;
+    ((currentPrice - fiveCandlesAgo) /
+      fiveCandlesAgo) *
+    100;
 
   return {
     currentPrice,
     sma10,
     sma30,
-    momentum,
-    volatility
+    momentum
   };
 }
 
-async function getBalances(walletAddress) {
-  const solResponse = await fetch(RPC_URL, {
+async function getSolBalance(walletAddress) {
+  const response = await fetch(RPC_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json"
+    },
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: 1,
@@ -92,27 +72,105 @@ async function getBalances(walletAddress) {
     })
   });
 
-  const solResult = await solResponse.json();
+  const result = await response.json();
 
-  if (!solResponse.ok || !Number.isFinite(solResult.result?.value)) {
+  const lamports =
+    result?.result?.value;
+
+  if (!Number.isFinite(lamports)) {
     throw new Error("Failed to load SOL balance");
   }
 
-  const tokenResponse = await fetch(RPC_URL, {
+  return lamports / 1e9;
+}
+
+async function getUsdcBalance(walletAddress) {
+  const response = await fetch(RPC_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json"
+    },
     body: JSON.stringify({
       jsonrpc: "2.0",
       id: 2,
       method: "getTokenAccountsByOwner",
       params: [
         walletAddress,
-        { mint: USDC_MINT },
-        { encoding: "jsonParsed" }
+        {
+          mint: USDC_MINT
+        },
+        {
+          encoding: "jsonParsed"
+        }
       ]
     })
   });
 
-  const tokenResult = await tokenResponse.json();
+  const result = await response.json();
 
-  if (!token
+  const accounts =
+    result?.result?.value || [];
+
+  let total = 0;
+
+  for (const account of accounts) {
+    const amount =
+      account?.account?.data?.parsed?.info?.tokenAmount
+        ?.uiAmount;
+
+    if (Number.isFinite(amount)) {
+      total += amount;
+    }
+  }
+
+  return total;
+}
+
+function makeDecision(market, balances) {
+  const {
+    currentPrice,
+    sma10,
+    sma30,
+    momentum
+  } = market;
+
+  const {
+    solBalance,
+    usdcBalance
+  } = balances;
+
+  // =========================
+  // BUY SIGNAL
+  // =========================
+
+  const bullishTrend =
+    sma10 > sma30;
+
+  const positiveMomentum =
+    momentum > 0.15;
+
+  if (
+    bullishTrend &&
+    positiveMomentum &&
+    usdcBalance >= MIN_USDC_TO_BUY
+  ) {
+    return {
+      decision: "BUY",
+      confidence: 75,
+      amount: BUY_USDC_AMOUNT,
+      reason:
+        "Short-term trend and momentum are bullish."
+    };
+  }
+
+  // =========================
+  // SELL SIGNAL
+  // =========================
+
+  const bearishTrend =
+    sma10 < sma30;
+
+  const negativeMomentum =
+    momentum < -0.15;
+
+  const can
