@@ -1,12 +1,3 @@
-import {
-  Connection,
-  Keypair,
-  LAMPORTS_PER_SOL,
-  PublicKey,
-  VersionedTransaction
-} from "@solana/web3.js";
-import bs58 from "bs58";
-
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -22,30 +13,6 @@ function jupiterHeaders() {
   return process.env.JUPITER_API_KEY
     ? { "x-api-key": process.env.JUPITER_API_KEY }
     : {};
-}
-
-function loadBotWallet() {
-  const privateKey = process.env.BOT_SOLANA_PRIVATE_KEY?.trim();
-
-  if (!privateKey) {
-    throw new Error("BOT_SOLANA_PRIVATE_KEY is missing");
-  }
-
-  return Keypair.fromSecretKey(bs58.decode(privateKey));
-}
-
-async function getUsdcBalance(connection, walletAddress) {
-  const accounts = await connection.getParsedTokenAccountsByOwner(
-    walletAddress,
-    { mint: new PublicKey(USDC_MINT) }
-  );
-
-  return accounts.value.reduce((total, account) => {
-    const amount =
-      account.account.data.parsed.info.tokenAmount.uiAmount || 0;
-
-    return total + Number(amount);
-  }, 0);
 }
 
 async function getMarketData() {
@@ -113,6 +80,80 @@ async function getMarketData() {
   };
 }
 
+async function getBalances(walletAddress) {
+  const solResponse = await fetch(RPC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getBalance",
+      params: [walletAddress]
+    })
+  });
+
+  const solResult = await solResponse.json();
+
+  if (!solResponse.ok || !Number.isFinite(solResult.result?.value)) {
+    throw new Error("Failed to load SOL balance");
+  }
+
+  const tokenResponse = await fetch(RPC_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "getTokenAccountsByOwner",
+      params: [
+        walletAddress,
+        { mint: USDC_MINT },
+        { encoding: "jsonParsed" }
+      ]
+    })
+  });
+
+  const tokenResult = await tokenResponse.json();
+
+  if (!tokenResponse.ok || !Array.isArray(tokenResult.result?.value)) {
+    throw new Error("Failed to load USDC balance");
+  }
+
+  const usdcBalance = tokenResult.result.value.reduce(
+    (total, account) => {
+      const amount =
+        account.account.data.parsed.info.tokenAmount.uiAmount || 0;
+
+      return total + Number(amount);
+    },
+    0
+  );
+
+  return {
+    solBalance: solResult.result.value / 1000000000,
+    usdcBalance
+  };
+}
+
+async function loadBotWallet() {
+  const privateKey = process.env.BOT_SOLANA_PRIVATE_KEY?.trim();
+
+  if (!privateKey) {
+    throw new Error("BOT_SOLANA_PRIVATE_KEY is missing");
+  }
+
+  const [web3Module, bs58Module] = await Promise.all([
+    import("@solana/web3.js"),
+    import("bs58")
+  ]);
+
+  const bs58 = bs58Module.default || bs58Module;
+
+  return web3Module.Keypair.fromSecretKey(
+    bs58.decode(privateKey)
+  );
+}
+
 async function getJupiterOrder({
   inputMint,
   outputMint,
@@ -123,7 +164,7 @@ async function getJupiterOrder({
     inputMint,
     outputMint,
     amount: String(amount),
-    taker: walletAddress.toString()
+    taker: walletAddress
   });
 
   const response = await fetch(
@@ -143,6 +184,8 @@ async function getJupiterOrder({
 }
 
 async function executeJupiterOrder(order, signer) {
+  const { VersionedTransaction } = await import("@solana/web3.js");
+
   const transaction = VersionedTransaction.deserialize(
     Buffer.from(order.transaction, "base64")
   );
@@ -247,14 +290,20 @@ export default async function handler(req, res) {
       });
     }
 
-    const signer = loadBotWallet();
-    const connection = new Connection(RPC_URL, "confirmed");
-    const walletAddress = signer.publicKey;
+    if (process.env.LIVE_TRADING_ENABLED !== "true") {
+      return res.status(200).json({
+        status: "dry_run",
+        executed: false,
+        action,
+        reason: "LIVE_TRADING_ENABLED is not true",
+        market
+      });
+    }
 
-    const lamports = await connection.getBalance(walletAddress);
-    const solBalance = lamports / LAMPORTS_PER_SOL;
-    const usdcBalance = await getUsdcBalance(
-      connection,
+    const signer = await loadBotWallet();
+    const walletAddress = signer.publicKey.toBase58();
+
+    const { solBalance, usdcBalance } = await getBalances(
       walletAddress
     );
 
@@ -310,7 +359,7 @@ export default async function handler(req, res) {
       order = await getJupiterOrder({
         inputMint: SOL_MINT,
         outputMint: USDC_MINT,
-        amount: Math.floor(tradeAmount * LAMPORTS_PER_SOL),
+        amount: Math.floor(tradeAmount * 1000000000),
         walletAddress
       });
     }
