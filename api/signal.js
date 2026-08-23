@@ -1,11 +1,12 @@
 // /api/signal.js
 // FAWAZ AI BOT
-// Signal Agent v3
+// Signal Agent v4
 //
-// مهم:
-// هذا الوكيل لا ينفذ أي صفقة.
-// وظيفته فقط قراءة Market Agent
-// وتحويل بيانات السوق إلى BUY أو WAIT.
+// الهدف:
+// التقاط micro-swings بشكل أسرع
+// مع توحيد قرار Market + Signal
+//
+// هذا الملف لا ينفذ أي صفقة مالية.
 
 
 // ======================================================
@@ -53,7 +54,7 @@ function getBaseUrl(req) {
 
 
 // ======================================================
-// SAFE NUMBER
+// HELPERS
 // ======================================================
 
 function num(
@@ -69,8 +70,23 @@ function num(
 }
 
 
+function clamp(
+  value,
+  min,
+  max
+) {
+  return Math.max(
+    min,
+    Math.min(
+      max,
+      value
+    )
+  );
+}
+
+
 // ======================================================
-// LOAD MARKET AGENT
+// LOAD MARKET
 // ======================================================
 
 async function loadMarket(req) {
@@ -86,7 +102,10 @@ async function loadMarket(req) {
         headers: {
           Accept:
             "application/json"
-        }
+        },
+
+        cache:
+          "no-store"
       }
     );
 
@@ -124,7 +143,7 @@ async function loadMarket(req) {
 
 
 // ======================================================
-// SIGNAL LOGIC
+// BUILD SIGNAL
 // ======================================================
 
 function buildSignal(
@@ -136,49 +155,61 @@ function buildSignal(
   const marketSignal =
     marketData.signal || {};
 
+
   const price =
-    num(market.price);
+    num(
+      market.price
+    );
+
 
   const spreadBps =
     num(
       market.spreadBps
     );
 
+
   const volatilityBps =
     num(
       market.volatilityBps
     );
+
 
   const microRangeBps =
     num(
       market.microRangeBps
     );
 
+
   const momentum1mBps =
     num(
       market.momentum1mBps
     );
+
 
   const momentum3mBps =
     num(
       market.momentum3mBps
     );
 
+
   const imbalance =
     num(
       market.orderBookImbalance
     );
 
-  const scalpingScore =
+
+  const marketScalpingScore =
     num(
       market.scalpingScore
     );
+
 
   const direction =
     String(
       market.direction ||
       "FLAT"
     ).toUpperCase();
+
 
   const marketMode =
     String(
@@ -188,165 +219,488 @@ function buildSignal(
 
 
   // ====================================================
-  // DEFAULT = WAIT
-  // ====================================================
-
-  let action =
-    "WAIT";
-
-  let reason =
-    "No high-quality micro-scalping setup";
-
-  let confidence =
-    Math.round(
-      scalpingScore
-    );
-
-
-  // ====================================================
-  // BASIC PROTECTIONS
+  // INVALID MARKET
   // ====================================================
 
   if (price <= 0) {
     return {
       action: "WAIT",
+
       confidence: 0,
+
       reason:
-        "Invalid market price"
+        "Invalid market price",
+
+      finalScore: 0,
+
+      price,
+
+      spreadBps,
+
+      volatilityBps,
+
+      microRangeBps,
+
+      momentum1mBps,
+
+      momentum3mBps,
+
+      orderBookImbalance:
+        imbalance,
+
+      scalpingScore:
+        0,
+
+      direction,
+
+      marketMode
     };
   }
 
 
-  // Spread واسع جدًا
-  if (spreadBps > 20) {
+  // ====================================================
+  // HARD SPREAD FILTER
+  // ====================================================
+
+  if (spreadBps > 18) {
     return {
       action: "WAIT",
 
-      confidence:
-        Math.min(
-          confidence,
-          30
-        ),
+      confidence: 20,
 
       reason:
-        "Market spread is too wide"
+        "Spread too wide for micro-scalping",
+
+      finalScore: 20,
+
+      price,
+
+      spreadBps,
+
+      volatilityBps,
+
+      microRangeBps,
+
+      momentum1mBps,
+
+      momentum3mBps,
+
+      orderBookImbalance:
+        imbalance,
+
+      scalpingScore:
+        marketScalpingScore,
+
+      direction,
+
+      marketMode
     };
   }
 
 
-  // السوق هادئ جدًا
+  // ====================================================
+  // SCORES
+  // ====================================================
+
+  let momentumScore = 0;
+
+  let dipScore = 0;
+
+  let liquidityScore = 0;
+
+  let volatilityScore = 0;
+
+  let spreadScore = 0;
+
+  let trendScore = 0;
+
+
+  // ====================================================
+  // SPREAD SCORE
+  //
+  // tight spread = أفضل
+  // ====================================================
+
+  if (spreadBps <= 3) {
+    spreadScore = 20;
+  }
+  else if (spreadBps <= 6) {
+    spreadScore = 16;
+  }
+  else if (spreadBps <= 10) {
+    spreadScore = 10;
+  }
+  else if (spreadBps <= 14) {
+    spreadScore = 5;
+  }
+
+
+  // ====================================================
+  // VOLATILITY SCORE
+  //
+  // نريد حركة كافية
+  // لكن ليست فوضوية جدًا
+  // ====================================================
+
   if (
-    volatilityBps < 3 &&
-    microRangeBps < 10
+    volatilityBps >= 4 &&
+    volatilityBps <= 15
   ) {
-    return {
-      action: "WAIT",
-
-      confidence:
-        Math.min(
-          confidence,
-          35
-        ),
-
-      reason:
-        "Market volatility is too low"
-    };
+    volatilityScore = 20;
+  }
+  else if (
+    volatilityBps >= 2 &&
+    volatilityBps < 4
+  ) {
+    volatilityScore = 12;
+  }
+  else if (
+    volatilityBps > 15 &&
+    volatilityBps <= 30
+  ) {
+    volatilityScore = 13;
+  }
+  else if (
+    volatilityBps > 30
+  ) {
+    volatilityScore = 5;
   }
 
 
   // ====================================================
-  // MOMENTUM ENTRY
+  // MOMENTUM SCORE
+  //
+  // ارتداد قصير أو تسارع للأعلى
   // ====================================================
 
-  const momentumSetup =
-    scalpingScore >= 45 &&
-    direction === "UP" &&
-    momentum1mBps >= 3 &&
-    momentum3mBps >= 5 &&
-    imbalance > -0.25;
+  if (
+    momentum1mBps >= 2 &&
+    momentum3mBps >= 3
+  ) {
+    momentumScore += 16;
+  }
+
+  if (
+    momentum1mBps >= 4 &&
+    momentum3mBps >= 6
+  ) {
+    momentumScore += 8;
+  }
+
+  if (
+    momentum1mBps >= 7
+  ) {
+    momentumScore += 5;
+  }
 
 
-  if (momentumSetup) {
+  momentumScore =
+    clamp(
+      momentumScore,
+      0,
+      25
+    );
+
+
+  // ====================================================
+  // DIP SCORE
+  //
+  // نزول قصير قابل للارتداد
+  // وليس انهيار قوي
+  // ====================================================
+
+  const mildDip =
+    momentum1mBps <= -2 &&
+    momentum1mBps >= -18;
+
+
+  const deeperDip =
+    momentum1mBps < -6 &&
+    momentum1mBps >= -30;
+
+
+  if (mildDip) {
+    dipScore += 10;
+  }
+
+
+  if (
+    deeperDip &&
+    momentum3mBps > -35
+  ) {
+    dipScore += 8;
+  }
+
+
+  // لو بدأ الارتداد بعد نزلة
+  if (
+    momentum1mBps > -4 &&
+    momentum3mBps < 0
+  ) {
+    dipScore += 6;
+  }
+
+
+  dipScore =
+    clamp(
+      dipScore,
+      0,
+      24
+    );
+
+
+  // ====================================================
+  // ORDER BOOK / LIQUIDITY
+  // ====================================================
+
+  if (imbalance >= 0.20) {
+    liquidityScore = 18;
+  }
+  else if (imbalance >= 0.08) {
+    liquidityScore = 14;
+  }
+  else if (imbalance >= 0) {
+    liquidityScore = 8;
+  }
+  else if (imbalance >= -0.15) {
+    liquidityScore = 4;
+  }
+  else {
+    liquidityScore = 0;
+  }
+
+
+  // ====================================================
+  // TREND SCORE
+  // ====================================================
+
+  if (direction === "UP") {
+    trendScore = 12;
+  }
+  else if (
+    direction === "FLAT"
+  ) {
+    trendScore = 7;
+  }
+  else if (
+    direction === "DOWN" &&
+    dipScore >= 14
+  ) {
+    // نزول لكن قابل للارتداد
+    trendScore = 4;
+  }
+
+
+  // ====================================================
+  // MARKET AGENT BASE SCORE
+  // ====================================================
+
+  const marketScoreComponent =
+    clamp(
+      marketScalpingScore *
+      0.15,
+      0,
+      15
+    );
+
+
+  // ====================================================
+  // FINAL SCORE
+  // ====================================================
+
+  let finalScore =
+    spreadScore +
+    volatilityScore +
+    liquidityScore +
+    trendScore +
+    marketScoreComponent;
+
+
+  // نختار أقوى setup:
+  // momentum أو dip
+  finalScore +=
+    Math.max(
+      momentumScore,
+      dipScore
+    );
+
+
+  // ====================================================
+  // PENALTIES
+  // ====================================================
+
+  if (
+    microRangeBps < 6
+  ) {
+    finalScore -= 10;
+  }
+
+
+  if (
+    volatilityBps < 2
+  ) {
+    finalScore -= 12;
+  }
+
+
+  if (
+    imbalance < -0.30
+  ) {
+    finalScore -= 15;
+  }
+
+
+  if (
+    spreadBps > 12
+  ) {
+    finalScore -= 10;
+  }
+
+
+  if (
+    momentum1mBps < -35
+  ) {
+    finalScore -= 20;
+  }
+
+
+  finalScore =
+    Math.round(
+      clamp(
+        finalScore,
+        0,
+        100
+      )
+    );
+
+
+  // ====================================================
+  // DECISION
+  // ====================================================
+
+  let action =
+    "WAIT";
+
+
+  let reason =
+    "No high-quality micro-swing setup";
+
+
+  /*
+    أسرع من v3:
+    سابقًا BUY غالبًا يحتاج 70+
+    الآن:
+    58+ = candidate
+  */
+
+  if (
+    finalScore >= 58
+  ) {
     action =
       "BUY";
 
-    reason =
-      "Positive micro momentum with sufficient volatility";
 
-    confidence =
-      Math.max(
-        70,
-        Math.min(
-          95,
-          Math.round(
-            scalpingScore
-          )
-        )
-      );
+    if (
+      dipScore >
+      momentumScore
+    ) {
+      reason =
+        "Micro-dip reversal with liquidity support";
+    }
+    else {
+      reason =
+        "Positive micro-momentum with favorable spread and volatility";
+    }
   }
 
 
   // ====================================================
-  // DIP / MICRO-REVERSAL ENTRY
-  // ====================================================
-
-  const dipSetup =
-    scalpingScore >= 50 &&
-    momentum1mBps <= -8 &&
-    momentum1mBps >= -80 &&
-    imbalance >= 0.05;
-
-
-  if (dipSetup) {
-    action =
-      "BUY";
-
-    reason =
-      "Micro dip with bid-side liquidity support";
-
-    confidence =
-      Math.max(
-        72,
-        Math.min(
-          95,
-          Math.round(
-            scalpingScore
-          )
-        )
-      );
-  }
-
-
-  // ====================================================
-  // MARKET AGENT CONFIRMATION
+  // EXTRA QUALITY GUARD
   // ====================================================
 
   if (
     action === "BUY" &&
-    marketSignal.action ===
-      "WAIT"
-  ) {
-    confidence =
-      Math.max(
-        65,
-        confidence - 8
-      );
-  }
-
-
-  // ====================================================
-  // FINAL CONFIDENCE GUARD
-  // ====================================================
-
-  if (
-    action === "BUY" &&
-    confidence < 70
+    spreadBps > 14
   ) {
     action =
       "WAIT";
 
     reason =
-      "Setup detected but confidence is below execution threshold";
+      "Setup detected but spread is too expensive";
+  }
+
+
+  if (
+    action === "BUY" &&
+    volatilityBps < 2
+  ) {
+    action =
+      "WAIT";
+
+    reason =
+      "Setup detected but volatility is insufficient";
+  }
+
+
+  // ====================================================
+  // MARKET AGENT ALIGNMENT
+  // ====================================================
+
+  const marketAction =
+    String(
+      marketSignal.action ||
+      "WAIT"
+    ).toUpperCase();
+
+
+  let confidence =
+    finalScore;
+
+
+  /*
+    Market Agent لا يلغي Signal Agent،
+    فقط يرفع أو يخفض الثقة.
+  */
+
+  if (
+    action === "BUY" &&
+    marketAction === "BUY"
+  ) {
+    confidence += 8;
+  }
+
+
+  if (
+    action === "BUY" &&
+    marketAction === "WAIT"
+  ) {
+    confidence -= 5;
+  }
+
+
+  confidence =
+    Math.round(
+      clamp(
+        confidence,
+        0,
+        95
+      )
+    );
+
+
+  // ====================================================
+  // FINAL CONFIDENCE FLOOR
+  // ====================================================
+
+  if (
+    action === "BUY" &&
+    confidence < 55
+  ) {
+    action =
+      "WAIT";
+
+    reason =
+      "Setup detected but combined confidence is insufficient";
   }
 
 
@@ -356,6 +710,8 @@ function buildSignal(
     confidence,
 
     reason,
+
+    finalScore,
 
     price,
 
@@ -372,7 +728,22 @@ function buildSignal(
     orderBookImbalance:
       imbalance,
 
-    scalpingScore,
+    scalpingScore:
+      finalScore,
+
+    marketScalpingScore,
+
+    momentumScore,
+
+    dipScore,
+
+    liquidityScore,
+
+    volatilityScore,
+
+    spreadScore,
+
+    trendScore,
 
     direction,
 
@@ -394,19 +765,23 @@ export default async function handler(
       .status(405)
       .json({
         status: "error",
+
         message:
           "GET only"
       });
   }
 
+
   try {
     const marketData =
       await loadMarket(req);
+
 
     const analysis =
       buildSignal(
         marketData
       );
+
 
     const signal = {
       signalId:
@@ -420,12 +795,6 @@ export default async function handler(
 
       confidence:
         analysis.confidence,
-
-      amount:
-        5,
-
-      currency:
-        "USDC",
 
       reason:
         analysis.reason,
@@ -455,6 +824,33 @@ export default async function handler(
       scalpingScore:
         analysis.scalpingScore,
 
+      marketScalpingScore:
+        analysis
+          .marketScalpingScore,
+
+      finalScore:
+        analysis.finalScore,
+
+      scoreBreakdown: {
+        momentum:
+          analysis.momentumScore,
+
+        dip:
+          analysis.dipScore,
+
+        liquidity:
+          analysis.liquidityScore,
+
+        volatility:
+          analysis.volatilityScore,
+
+        spread:
+          analysis.spreadScore,
+
+        trend:
+          analysis.trendScore
+      },
+
       direction:
         analysis.direction,
 
@@ -479,7 +875,7 @@ export default async function handler(
         status: "ok",
 
         engine:
-          "FAWAZ_SIGNAL_AGENT_V3",
+          "FAWAZ_SIGNAL_AGENT_V4",
 
         signal,
 
@@ -487,11 +883,13 @@ export default async function handler(
           marketData.market
       });
 
-  } catch (error) {
+  }
+  catch (error) {
     console.error(
       "Signal Agent Error:",
       error
     );
+
 
     return res
       .status(500)
@@ -499,7 +897,7 @@ export default async function handler(
         status: "error",
 
         engine:
-          "FAWAZ_SIGNAL_AGENT_V3",
+          "FAWAZ_SIGNAL_AGENT_V4",
 
         message:
           error?.message ||
