@@ -1,1 +1,3 @@
-# Solana test bot
+# Solana Test Bot
+
+Credentials updated.
