@@ -1,0 +1,30 @@
+name: SOL Auto Trader
+
+on:
+  schedule:
+    - cron: "3/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sol-auto-trader
+  cancel-in-progress: false
+
+jobs:
+  run-trader:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Run protected trading cycle
+        env:
+          AUTO_TRADER_SECRET: ${{ secrets.AUTO_TRADER_SECRET }}
+        run: |
+          curl --silent --show-error --fail-with-body \
+            --connect-timeout 15 \
+            --max-time 50 \
+            --retry 2 \
+            -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+            -H "Accept: application/json" \
+            "https://fawaz-ai-bot.vercel.app/api/trade-orchestrator"
