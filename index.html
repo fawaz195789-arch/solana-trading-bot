@@ -1,22 +1,98 @@
-<div class="card">
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FAWAZ AI BOT</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #111; }
+    .card { max-width: 520px; }
+    button { margin-left: 8px; padding: 8px 12px; cursor: pointer; }
+    .status { margin-top: 14px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h3>⚡ على سولانا DEX تداول</h3>
 
-  <h3>تداول DEX على سولانا ⚡</h3>
+    <div>
+      <b>المحفظة:</b>
+      <span id="walletAddress">غير متصلة</span>
+    </div>
 
-  <div class="row">
-    <b>المحفظة</b>
-    <span id="walletAddress">غير متصلة</span>
+    <br />
+
+    <button id="connectButton" type="button">ربط محفظة OKX</button>
+    <button id="testButton" type="button" disabled>اختبار الاتصال</button>
+
+    <div class="status" id="dexStatus">بانتظار ربط المحفظة</div>
   </div>
 
-  <button onclick="connectOKXWallet()">
-    ربط محفظة OKX
-  </button>
+  <script>
+    let connectedAddress = "";
 
-  <button onclick="testDexTrade()">
-    اختبار تداول 0.01 SOL
-  </button>
+    function getOKXProvider() {
+      return window.okxwallet && window.okxwallet.solana
+        ? window.okxwallet.solana
+        : null;
+    }
 
-  <div class="status" id="dexStatus">
-    بانتظار ربط المحفظة
-  </div>
+    async function connectOKXWallet() {
+      const status = document.getElementById("dexStatus");
+      const wallet = document.getElementById("walletAddress");
+      const testButton = document.getElementById("testButton");
 
-</div>
+      const provider = getOKXProvider();
+
+      if (!provider) {
+        status.textContent =
+          "لم يتم العثور على محفظة OKX. افتح الصفحة من متصفح OKX Wallet.";
+        return;
+      }
+
+      try {
+        status.textContent = "بانتظار موافقة محفظة OKX...";
+
+        const result = await provider.connect();
+        const publicKey = result && result.publicKey
+          ? result.publicKey
+          : provider.publicKey;
+
+        connectedAddress = publicKey ? publicKey.toString() : "";
+
+        if (!connectedAddress) {
+          throw new Error("لم يتم استلام عنوان المحفظة");
+        }
+
+        wallet.textContent =
+          connectedAddress.slice(0, 6) + "..." + connectedAddress.slice(-4);
+
+        status.textContent = "✅ تم ربط محفظة OKX بنجاح";
+        testButton.disabled = false;
+      } catch (error) {
+        status.textContent =
+          "❌ لم يكتمل الربط: " + (error.message || "تم الإلغاء");
+      }
+    }
+
+    function testConnection() {
+      if (!connectedAddress) {
+        document.getElementById("dexStatus").textContent =
+          "اربط المحفظة أولًا.";
+        return;
+      }
+
+      document.getElementById("dexStatus").textContent =
+        "✅ الاتصال سليم. لم تُنفذ أي صفقة أو عملية سحب.";
+    }
+
+    document
+      .getElementById("connectButton")
+      .addEventListener("click", connectOKXWallet);
+
+    document
+      .getElementById("testButton")
+      .addEventListener("click", testConnection);
+  </script>
+</body>
+</html>
