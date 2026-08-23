@@ -11,8 +11,6 @@ function getDatabaseUrl() {
     return direct;
   }
 
-  // احتياط: ابحث تلقائيًا عن متغير Vercel
-  // الذي يحتوي رابط PostgreSQL.
   for (const value of Object.values(process.env)) {
     if (
       typeof value === "string" &&
@@ -25,7 +23,9 @@ function getDatabaseUrl() {
     }
   }
 
-  throw new Error("Postgres database URL not found");
+  throw new Error(
+    "Postgres database URL not found"
+  );
 }
 
 function db() {
@@ -33,7 +33,7 @@ function db() {
 }
 
 // ======================================================
-// CREATE TABLES AUTOMATICALLY
+// CREATE / UPGRADE TABLES
 // ======================================================
 
 export async function ensureTradingTables() {
@@ -42,45 +42,168 @@ export async function ensureTradingTables() {
   await sql`
     CREATE TABLE IF NOT EXISTS bot_positions (
       id SERIAL PRIMARY KEY,
-      wallet_address TEXT NOT NULL,
-      symbol TEXT NOT NULL DEFAULT 'SOL-USDC',
-      status TEXT NOT NULL DEFAULT 'OPEN',
 
-      entry_price DOUBLE PRECISION NOT NULL,
-      entry_sol DOUBLE PRECISION NOT NULL,
-      entry_usdc DOUBLE PRECISION NOT NULL,
+      wallet_address TEXT NOT NULL,
+
+      symbol TEXT NOT NULL
+        DEFAULT 'SOL-USDC',
+
+      status TEXT NOT NULL
+        DEFAULT 'OPEN',
+
+      slot_id INTEGER NOT NULL
+        DEFAULT 1,
+
+      strategy TEXT NOT NULL
+        DEFAULT 'MICRO_SCALP',
+
+      entry_price DOUBLE PRECISION
+        NOT NULL,
+
+      entry_sol DOUBLE PRECISION
+        NOT NULL,
+
+      entry_usdc DOUBLE PRECISION
+        NOT NULL,
 
       buy_signature TEXT,
 
-      opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      opened_at TIMESTAMPTZ
+        NOT NULL DEFAULT NOW(),
+
+      highest_price DOUBLE PRECISION,
+
+      target_bps DOUBLE PRECISION,
+
+      trailing_active BOOLEAN
+        NOT NULL DEFAULT FALSE,
+
+      trailing_distance_bps
+        DOUBLE PRECISION,
 
       exit_price DOUBLE PRECISION,
+
       exit_usdc DOUBLE PRECISION,
+
       sell_signature TEXT,
 
+      close_reason TEXT,
+
       realized_pnl DOUBLE PRECISION,
-      realized_pnl_pct DOUBLE PRECISION,
+
+      realized_pnl_pct
+        DOUBLE PRECISION,
 
       closed_at TIMESTAMPTZ
     )
   `;
 
+  // ====================================================
+  // UPGRADE OLD TABLE SAFELY
+  // ====================================================
+
   await sql`
-    CREATE INDEX IF NOT EXISTS idx_bot_positions_wallet_status
-    ON bot_positions(wallet_address, status)
+    ALTER TABLE bot_positions
+    ADD COLUMN IF NOT EXISTS
+      slot_id INTEGER
   `;
 
   await sql`
-    CREATE INDEX IF NOT EXISTS idx_bot_positions_closed_at
-    ON bot_positions(closed_at)
+    ALTER TABLE bot_positions
+    ADD COLUMN IF NOT EXISTS
+      strategy TEXT
+  `;
+
+  await sql`
+    ALTER TABLE bot_positions
+    ADD COLUMN IF NOT EXISTS
+      highest_price DOUBLE PRECISION
+  `;
+
+  await sql`
+    ALTER TABLE bot_positions
+    ADD COLUMN IF NOT EXISTS
+      target_bps DOUBLE PRECISION
+  `;
+
+  await sql`
+    ALTER TABLE bot_positions
+    ADD COLUMN IF NOT EXISTS
+      trailing_active BOOLEAN
+  `;
+
+  await sql`
+    ALTER TABLE bot_positions
+    ADD COLUMN IF NOT EXISTS
+      trailing_distance_bps
+      DOUBLE PRECISION
+  `;
+
+  await sql`
+    ALTER TABLE bot_positions
+    ADD COLUMN IF NOT EXISTS
+      close_reason TEXT
+  `;
+
+  // ====================================================
+  // MIGRATE CURRENT OLD POSITION TO SLOT 1
+  // ====================================================
+
+  await sql`
+    UPDATE bot_positions
+    SET slot_id = 1
+    WHERE slot_id IS NULL
+  `;
+
+  await sql`
+    UPDATE bot_positions
+    SET strategy = 'LEGACY'
+    WHERE strategy IS NULL
+  `;
+
+  await sql`
+    UPDATE bot_positions
+    SET trailing_active = FALSE
+    WHERE trailing_active IS NULL
+  `;
+
+  // ====================================================
+  // INDEXES
+  // ====================================================
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS
+      idx_bot_positions_wallet_status
+    ON bot_positions(
+      wallet_address,
+      status
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS
+      idx_bot_positions_wallet_slot
+    ON bot_positions(
+      wallet_address,
+      slot_id,
+      status
+    )
+  `;
+
+  await sql`
+    CREATE INDEX IF NOT EXISTS
+      idx_bot_positions_closed_at
+    ON bot_positions(
+      closed_at
+    )
   `;
 }
 
 // ======================================================
-// GET CURRENT OPEN POSITION
+// GET ALL OPEN POSITIONS
 // ======================================================
 
-export async function getOpenPosition(
+export async function getOpenPositions(
   walletAddress
 ) {
   await ensureTradingTables();
@@ -90,13 +213,102 @@ export async function getOpenPosition(
   const rows = await sql`
     SELECT *
     FROM bot_positions
-    WHERE wallet_address = ${walletAddress}
+
+    WHERE wallet_address =
+      ${walletAddress}
+
       AND status = 'OPEN'
+
+    ORDER BY
+      slot_id ASC,
+      opened_at ASC
+  `;
+
+  return rows || [];
+}
+
+// ======================================================
+// GET ONE OPEN POSITION
+// Kept for old dashboard compatibility
+// ======================================================
+
+export async function getOpenPosition(
+  walletAddress
+) {
+  const positions =
+    await getOpenPositions(
+      walletAddress
+    );
+
+  return positions[0] || null;
+}
+
+// ======================================================
+// GET POSITION BY SLOT
+// ======================================================
+
+export async function getOpenPositionBySlot(
+  walletAddress,
+  slotId
+) {
+  await ensureTradingTables();
+
+  const sql = db();
+
+  const rows = await sql`
+    SELECT *
+    FROM bot_positions
+
+    WHERE wallet_address =
+      ${walletAddress}
+
+      AND status = 'OPEN'
+
+      AND slot_id =
+      ${Number(slotId)}
+
     ORDER BY opened_at DESC
+
     LIMIT 1
   `;
 
   return rows[0] || null;
+}
+
+// ======================================================
+// FIND FREE SLOT
+// ======================================================
+
+export async function getFreeSlot(
+  walletAddress,
+  maxSlots = 4
+) {
+  const openPositions =
+    await getOpenPositions(
+      walletAddress
+    );
+
+  const usedSlots =
+    new Set(
+      openPositions.map(
+        (position) =>
+          Number(position.slot_id)
+      )
+    );
+
+  for (
+    let slot = 1;
+    slot <= maxSlots;
+    slot++
+  ) {
+    if (
+      !usedSlots.has(slot)
+    ) {
+      return slot;
+    }
+  }
+
+  return null;
 }
 
 // ======================================================
@@ -105,21 +317,44 @@ export async function getOpenPosition(
 
 export async function openPosition({
   walletAddress,
+  slotId,
   entryPrice,
   entrySol,
   entryUsdc,
-  signature
+  signature,
+  strategy = "MICRO_SCALP",
+  targetBps = null,
+  trailingDistanceBps = null
 }) {
   await ensureTradingTables();
 
   const sql = db();
 
+  const numericSlot =
+    Number(slotId);
+
+  if (
+    !Number.isInteger(numericSlot) ||
+    numericSlot < 1
+  ) {
+    throw new Error(
+      "Invalid slotId"
+    );
+  }
+
+  // ====================================================
+  // ONLY BLOCK SAME SLOT
+  // ====================================================
+
   const existing =
-    await getOpenPosition(walletAddress);
+    await getOpenPositionBySlot(
+      walletAddress,
+      numericSlot
+    );
 
   if (existing) {
     throw new Error(
-      "An open position already exists"
+      `Slot ${numericSlot} already has an open position`
     );
   }
 
@@ -128,26 +363,145 @@ export async function openPosition({
       wallet_address,
       symbol,
       status,
+
+      slot_id,
+      strategy,
+
       entry_price,
       entry_sol,
       entry_usdc,
+
+      highest_price,
+
+      target_bps,
+
+      trailing_active,
+
+      trailing_distance_bps,
+
       buy_signature,
+
       opened_at
     )
     VALUES (
       ${walletAddress},
+
       'SOL-USDC',
+
       'OPEN',
-      ${entryPrice},
-      ${entrySol},
-      ${entryUsdc},
+
+      ${numericSlot},
+
+      ${strategy},
+
+      ${Number(entryPrice)},
+
+      ${Number(entrySol)},
+
+      ${Number(entryUsdc)},
+
+      ${Number(entryPrice)},
+
+      ${
+        targetBps !== null
+          ? Number(targetBps)
+          : null
+      },
+
+      FALSE,
+
+      ${
+        trailingDistanceBps !== null
+          ? Number(
+              trailingDistanceBps
+            )
+          : null
+      },
+
       ${signature || null},
+
       NOW()
     )
+
     RETURNING *
   `;
 
   return rows[0];
+}
+
+// ======================================================
+// UPDATE POSITION HIGH
+// ======================================================
+
+export async function updateHighestPrice({
+  id,
+  highestPrice
+}) {
+  await ensureTradingTables();
+
+  const sql = db();
+
+  const rows = await sql`
+    UPDATE bot_positions
+
+    SET highest_price =
+      GREATEST(
+        COALESCE(
+          highest_price,
+          entry_price
+        ),
+        ${Number(highestPrice)}
+      )
+
+    WHERE id = ${Number(id)}
+      AND status = 'OPEN'
+
+    RETURNING *
+  `;
+
+  return rows[0] || null;
+}
+
+// ======================================================
+// ENABLE TRAILING
+// ======================================================
+
+export async function activateTrailing({
+  id,
+  highestPrice = null
+}) {
+  await ensureTradingTables();
+
+  const sql = db();
+
+  const rows = await sql`
+    UPDATE bot_positions
+
+    SET
+      trailing_active = TRUE,
+
+      highest_price =
+        CASE
+          WHEN ${highestPrice}::double precision
+            IS NULL
+          THEN highest_price
+
+          ELSE GREATEST(
+            COALESCE(
+              highest_price,
+              entry_price
+            ),
+            ${highestPrice}::double precision
+          )
+        END
+
+    WHERE id = ${Number(id)}
+      AND status = 'OPEN'
+
+    RETURNING *
+  `;
+
+  return rows[0] || null;
 }
 
 // ======================================================
@@ -158,7 +512,8 @@ export async function closePosition({
   id,
   exitPrice,
   exitUsdc,
-  signature
+  signature,
+  reason = "EXIT"
 }) {
   await ensureTradingTables();
 
@@ -167,8 +522,10 @@ export async function closePosition({
   const rows = await sql`
     SELECT *
     FROM bot_positions
-    WHERE id = ${id}
+
+    WHERE id = ${Number(id)}
       AND status = 'OPEN'
+
     LIMIT 1
   `;
 
@@ -182,34 +539,119 @@ export async function closePosition({
   }
 
   const entryUsdc =
-    Number(position.entry_usdc);
+    Number(
+      position.entry_usdc
+    );
 
   const receivedUsdc =
     Number(exitUsdc);
 
+  if (
+    !Number.isFinite(
+      receivedUsdc
+    ) ||
+    receivedUsdc < 0
+  ) {
+    throw new Error(
+      "Invalid exitUsdc"
+    );
+  }
+
   const pnl =
-    receivedUsdc - entryUsdc;
+    receivedUsdc -
+    entryUsdc;
 
   const pnlPct =
     entryUsdc > 0
-      ? (pnl / entryUsdc) * 100
+      ? (
+          pnl /
+          entryUsdc
+        ) * 100
       : 0;
 
-  const updated = await sql`
-    UPDATE bot_positions
-    SET
-      status = 'CLOSED',
-      exit_price = ${exitPrice},
-      exit_usdc = ${receivedUsdc},
-      sell_signature = ${signature || null},
-      realized_pnl = ${pnl},
-      realized_pnl_pct = ${pnlPct},
-      closed_at = NOW()
-    WHERE id = ${id}
-    RETURNING *
-  `;
+  const updated =
+    await sql`
+      UPDATE bot_positions
+
+      SET
+        status = 'CLOSED',
+
+        exit_price =
+          ${Number(exitPrice)},
+
+        exit_usdc =
+          ${receivedUsdc},
+
+        sell_signature =
+          ${signature || null},
+
+        close_reason =
+          ${reason},
+
+        realized_pnl =
+          ${pnl},
+
+        realized_pnl_pct =
+          ${pnlPct},
+
+        closed_at = NOW()
+
+      WHERE id =
+        ${Number(id)}
+
+      RETURNING *
+    `;
 
   return updated[0];
+}
+
+// ======================================================
+// RECENT CLOSED TRADES
+// Used by Risk Agent
+// ======================================================
+
+export async function getRecentClosedTrades(
+  walletAddress,
+  limit = 20
+) {
+  await ensureTradingTables();
+
+  const sql = db();
+
+  const safeLimit =
+    Math.max(
+      1,
+      Math.min(
+        100,
+        Number(limit) || 20
+      )
+    );
+
+  const rows = await sql`
+    SELECT *
+    FROM bot_positions
+
+    WHERE wallet_address =
+      ${walletAddress}
+
+      AND status = 'CLOSED'
+
+    ORDER BY closed_at DESC
+
+    LIMIT ${safeLimit}
+  `;
+
+  return rows.map(
+    (trade) => ({
+      ...trade,
+
+      pnlBps:
+        Number(
+          trade.realized_pnl_pct ||
+          0
+        ) * 100
+    })
+  );
 }
 
 // ======================================================
@@ -225,7 +667,8 @@ export async function get24HourStats(
 
   const rows = await sql`
     SELECT
-      COUNT(*)::int AS trades,
+      COUNT(*)::int
+        AS trades,
 
       COUNT(*) FILTER (
         WHERE realized_pnl > 0
@@ -238,42 +681,61 @@ export async function get24HourStats(
       COALESCE(
         SUM(realized_pnl),
         0
-      )::double precision AS pnl
+      )::double precision
+        AS pnl
 
     FROM bot_positions
 
-    WHERE wallet_address = ${walletAddress}
+    WHERE wallet_address =
+      ${walletAddress}
+
       AND status = 'CLOSED'
-      AND closed_at >= NOW() - INTERVAL '24 hours'
+
+      AND closed_at >=
+        NOW() -
+        INTERVAL '24 hours'
   `;
 
   const stats =
     rows[0];
 
   const trades =
-    Number(stats.trades || 0);
+    Number(
+      stats.trades || 0
+    );
 
   const wins =
-    Number(stats.wins || 0);
+    Number(
+      stats.wins || 0
+    );
 
   return {
     trades,
+
     wins,
+
     losses:
-      Number(stats.losses || 0),
+      Number(
+        stats.losses || 0
+      ),
 
     pnl:
-      Number(stats.pnl || 0),
+      Number(
+        stats.pnl || 0
+      ),
 
     winRate:
       trades > 0
-        ? (wins / trades) * 100
+        ? (
+            wins /
+            trades
+          ) * 100
         : 0
   };
 }
 
 // ======================================================
-// ALL-TIME STATS
+// ALL TIME STATS
 // ======================================================
 
 export async function getAllTimeStats(
@@ -285,7 +747,8 @@ export async function getAllTimeStats(
 
   const rows = await sql`
     SELECT
-      COUNT(*)::int AS trades,
+      COUNT(*)::int
+        AS trades,
 
       COUNT(*) FILTER (
         WHERE realized_pnl > 0
@@ -298,11 +761,14 @@ export async function getAllTimeStats(
       COALESCE(
         SUM(realized_pnl),
         0
-      )::double precision AS pnl
+      )::double precision
+        AS pnl
 
     FROM bot_positions
 
-    WHERE wallet_address = ${walletAddress}
+    WHERE wallet_address =
+      ${walletAddress}
+
       AND status = 'CLOSED'
   `;
 
@@ -310,24 +776,36 @@ export async function getAllTimeStats(
     rows[0];
 
   const trades =
-    Number(stats.trades || 0);
+    Number(
+      stats.trades || 0
+    );
 
   const wins =
-    Number(stats.wins || 0);
+    Number(
+      stats.wins || 0
+    );
 
   return {
     trades,
+
     wins,
 
     losses:
-      Number(stats.losses || 0),
+      Number(
+        stats.losses || 0
+      ),
 
     pnl:
-      Number(stats.pnl || 0),
+      Number(
+        stats.pnl || 0
+      ),
 
     winRate:
       trades > 0
-        ? (wins / trades) * 100
+        ? (
+            wins /
+            trades
+          ) * 100
         : 0
   };
 }
@@ -340,18 +818,39 @@ export async function getTradingDashboard(
   walletAddress
 ) {
   const [
-    position,
+    positions,
     day,
     total
   ] = await Promise.all([
-    getOpenPosition(walletAddress),
-    get24HourStats(walletAddress),
-    getAllTimeStats(walletAddress)
+    getOpenPositions(
+      walletAddress
+    ),
+
+    get24HourStats(
+      walletAddress
+    ),
+
+    getAllTimeStats(
+      walletAddress
+    )
   ]);
 
   return {
-    openPosition: position,
-    last24Hours: day,
-    allTime: total
+    // القديم يستمر بالعمل
+    openPosition:
+      positions[0] || null,
+
+    // الجديد يعرض كل Slots
+    openPositions:
+      positions,
+
+    openSlots:
+      positions.length,
+
+    last24Hours:
+      day,
+
+    allTime:
+      total
   };
 }
