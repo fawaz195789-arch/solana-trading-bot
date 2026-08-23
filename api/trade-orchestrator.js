@@ -1,11 +1,7 @@
 // /api/trade-orchestrator.js
 // FAWAZ AI BOT
-// SAFE DRY RUN ORCHESTRATOR v1
-//
-// هذه النسخة لا ترسل أي صفقة إلى Jupiter.
-// لا BUY حقيقي ولا SELL حقيقي.
-// وظيفتها اختبار:
-// Market -> Signal -> Risk -> Slots -> Neon
+// PAPER SCALPER V1
+// 4 Slots - NO REAL TRADING
 
 import {
   evaluateRisk,
@@ -15,18 +11,16 @@ import {
 import {
   getOpenPositions,
   getFreeSlot,
+  openPosition,
+  closePosition,
+  updateHighestPrice,
+  activateTrailing,
   getRecentClosedTrades,
   getTradingDashboard
 } from "./trading-store.js";
 
-
-// ======================================================
-// CONFIG
-// ======================================================
-
 const CONFIG = {
   maxSlots: 4,
-
   slotUsd: 5,
 
   calmTargetBps: 30,
@@ -35,52 +29,32 @@ const CONFIG = {
 
   stopLossBps: 45,
 
-  maxSlippageBps: 30,
+  trailingActivationRatio: 0.65,
+  trailingDistanceRatio: 0.30,
 
-  minNetEdgeBps: 12
+  minNetEdgeBps: 12,
+  estimatedSlippageBps: 6,
+
+  maxEntriesPerCycle: 1
 };
 
-
-// ======================================================
-// HELPERS
-// ======================================================
-
-function num(
-  value,
-  fallback = 0
-) {
-  const n =
-    Number(value);
-
+function num(value, fallback = 0) {
+  const n = Number(value);
   return Number.isFinite(n)
     ? n
     : fallback;
 }
 
-
-function clamp(
-  value,
-  min,
-  max
-) {
+function clamp(value, min, max) {
   return Math.max(
     min,
-    Math.min(
-      max,
-      value
-    )
+    Math.min(max, value)
   );
 }
-
 
 function toBps(value) {
   return value * 10000;
 }
-
-
-// ======================================================
-// WALLET
-// ======================================================
 
 function getWalletAddress() {
   const wallet =
@@ -98,71 +72,9 @@ function getWalletAddress() {
   return wallet.trim();
 }
 
-
-// ======================================================
-// AUTH
-// POST يحتاج السر
-// GET آمن لأنه Dry Run فقط
-// ======================================================
-
-function authorize(req) {
-  if (
-    req.method === "GET"
-  ) {
-    return {
-      ok: true
-    };
-  }
-
-  const secret =
-    process.env.AUTO_TRADER_SECRET;
-
-  if (!secret) {
-    return {
-      ok: false,
-
-      status: 500,
-
-      reason:
-        "AUTO_TRADER_SECRET_MISSING"
-    };
-  }
-
-  const header =
-    req.headers.authorization ||
-    req.headers.Authorization ||
-    "";
-
-  if (
-    header !==
-    `Bearer ${secret}`
-  ) {
-    return {
-      ok: false,
-
-      status: 401,
-
-      reason:
-        "UNAUTHORIZED"
-    };
-  }
-
-  return {
-    ok: true
-  };
-}
-
-
-// ======================================================
-// BASE URL
-// ======================================================
-
 function getBaseUrl(req) {
-  if (
-    process.env.APP_BASE_URL
-  ) {
-    return process.env
-      .APP_BASE_URL
+  if (process.env.APP_BASE_URL) {
+    return process.env.APP_BASE_URL
       .replace(/\/$/, "");
   }
 
@@ -177,9 +89,7 @@ function getBaseUrl(req) {
     );
   }
 
-  if (
-    process.env.VERCEL_URL
-  ) {
+  if (process.env.VERCEL_URL) {
     return (
       "https://" +
       process.env.VERCEL_URL
@@ -190,37 +100,20 @@ function getBaseUrl(req) {
     req.headers.host;
 
   if (host) {
-    const protocol =
-      host.includes(
-        "localhost"
-      )
-        ? "http"
-        : "https";
-
-    return (
-      `${protocol}://${host}`
-    );
+    return `https://${host}`;
   }
 
-  return (
-    "https://fawaz-ai-bot.vercel.app"
-  );
+  return "https://fawaz-ai-bot.vercel.app";
 }
 
-
-// ======================================================
-// FETCH JSON
-// ======================================================
-
-async function fetchJson(
-  url,
-  options = {}
-) {
+async function fetchJson(url) {
   const response =
-    await fetch(
-      url,
-      options
-    );
+    await fetch(url, {
+      headers: {
+        Accept:
+          "application/json"
+      }
+    });
 
   const text =
     await response.text();
@@ -247,26 +140,13 @@ async function fetchJson(
   return data;
 }
 
-
-// ======================================================
-// LOAD SIGNAL
-// ======================================================
-
 async function loadSignal(req) {
   const baseUrl =
     getBaseUrl(req);
 
   const data =
     await fetchJson(
-      `${baseUrl}/api/signal`,
-      {
-        method: "GET",
-
-        headers: {
-          Accept:
-            "application/json"
-        }
-      }
+      `${baseUrl}/api/signal`
     );
 
   if (
@@ -278,19 +158,14 @@ async function loadSignal(req) {
     );
   }
 
-  return data;
+  return data.signal;
 }
-
-
-// ======================================================
-// TARGET
-// ======================================================
 
 function getDynamicTarget(
   signal,
   riskMode
 ) {
-  const marketMode =
+  const mode =
     String(
       signal.marketMode ||
       "CALM"
@@ -299,30 +174,24 @@ function getDynamicTarget(
   let target =
     CONFIG.calmTargetBps;
 
-  if (
-    marketMode === "NORMAL"
-  ) {
+  if (mode === "NORMAL") {
     target =
       CONFIG.normalTargetBps;
   }
 
-  if (
-    marketMode === "FAST"
-  ) {
+  if (mode === "FAST") {
     target =
       CONFIG.fastTargetBps;
   }
 
-  if (
-    riskMode === "FAST"
-  ) {
-    target *= 1.10;
+  if (riskMode === "FAST") {
+    target *= 1.1;
   }
 
   if (
     riskMode === "DEFENSIVE"
   ) {
-    target *= 0.80;
+    target *= 0.8;
   }
 
   return Math.round(
@@ -334,112 +203,457 @@ function getDynamicTarget(
   );
 }
 
-
-// ======================================================
-// PREVIEW EXISTING POSITIONS
-// لا نبيع فعليًا
-// ======================================================
-
-function previewPositions(
+async function managePositions({
   positions,
   currentPrice
-) {
-  return positions.map(
-    (position) => {
-      const entryPrice =
+}) {
+  const events = [];
+
+  for (
+    const position
+    of positions
+  ) {
+    const entryPrice =
+      num(
+        position.entry_price
+      );
+
+    if (entryPrice <= 0) {
+      continue;
+    }
+
+    const pnlBps =
+      toBps(
+        (
+          currentPrice -
+          entryPrice
+        ) /
+        entryPrice
+      );
+
+    let highestPrice =
+      num(
+        position.highest_price,
+        entryPrice
+      );
+
+    if (
+      currentPrice >
+      highestPrice
+    ) {
+      highestPrice =
+        currentPrice;
+
+      await updateHighestPrice({
+        id:
+          position.id,
+
+        highestPrice
+      });
+    }
+
+    const targetBps =
+      num(
+        position.target_bps,
+        CONFIG.normalTargetBps
+      );
+
+    // STOP LOSS
+    if (
+      pnlBps <=
+      -CONFIG.stopLossBps
+    ) {
+      const exitUsdc =
         num(
-          position.entry_price
+          position.entry_usdc
+        ) *
+        (
+          1 +
+          pnlBps /
+          10000
         );
 
-      if (
-        entryPrice <= 0
-      ) {
-        return {
-          slotId:
-            position.slot_id,
+      const closed =
+        await closePosition({
+          id:
+            position.id,
 
-          action:
-            "ERROR",
+          exitPrice:
+            currentPrice,
+
+          exitUsdc,
+
+          signature:
+            "PAPER_SELL",
 
           reason:
-            "INVALID_ENTRY_PRICE"
-        };
-      }
+            "PAPER_STOP_LOSS"
+        });
 
-      const pnlBps =
-        toBps(
+      events.push({
+        slotId:
+          position.slot_id,
+
+        action:
+          "SELL",
+
+        reason:
+          "STOP_LOSS",
+
+        pnlPct:
+          closed
+            .realized_pnl_pct
+      });
+
+      continue;
+    }
+
+    const activationBps =
+      targetBps *
+      CONFIG
+        .trailingActivationRatio;
+
+    let trailingActive =
+      position
+        .trailing_active === true;
+
+    if (
+      !trailingActive &&
+      pnlBps >=
+        activationBps
+    ) {
+      await activateTrailing({
+        id:
+          position.id,
+
+        highestPrice
+      });
+
+      trailingActive =
+        true;
+    }
+
+    // TRAILING EXIT
+    if (trailingActive) {
+      const distanceBps =
+        num(
+          position
+            .trailing_distance_bps,
+          Math.max(
+            8,
+            targetBps *
+              CONFIG
+                .trailingDistanceRatio
+          )
+        );
+
+      const dropBps =
+        highestPrice > 0
+          ? toBps(
+              (
+                highestPrice -
+                currentPrice
+              ) /
+                highestPrice
+            )
+          : 0;
+
+      if (
+        dropBps >=
+        distanceBps
+      ) {
+        const pnlPct =
           (
             currentPrice -
             entryPrice
           ) /
+          entryPrice;
+
+        const exitUsdc =
+          num(
+            position.entry_usdc
+          ) *
+          (
+            1 +
+            pnlPct
+          );
+
+        const closed =
+          await closePosition({
+            id:
+              position.id,
+
+            exitPrice:
+              currentPrice,
+
+            exitUsdc,
+
+            signature:
+              "PAPER_SELL",
+
+            reason:
+              "PAPER_TRAILING"
+          });
+
+        events.push({
+          slotId:
+            position.slot_id,
+
+          action:
+            "SELL",
+
+          reason:
+            "TRAILING_PROFIT",
+
+          pnlPct:
+            closed
+              .realized_pnl_pct
+        });
+
+        continue;
+      }
+    }
+
+    // HARD TARGET
+    if (
+      pnlBps >=
+      targetBps * 1.4
+    ) {
+      const pnlPct =
+        (
+          currentPrice -
           entryPrice
-        );
+        ) /
+        entryPrice;
 
-      const targetBps =
+      const exitUsdc =
         num(
-          position.target_bps,
-          CONFIG.normalTargetBps
+          position.entry_usdc
+        ) *
+        (
+          1 +
+          pnlPct
         );
 
-      let wouldAction =
-        "HOLD";
+      const closed =
+        await closePosition({
+          id:
+            position.id,
 
-      let reason =
-        "KEEP_OPEN";
+          exitPrice:
+            currentPrice,
 
+          exitUsdc,
 
-      if (
-        pnlBps <=
-        -CONFIG.stopLossBps
-      ) {
-        wouldAction =
-          "SELL";
+          signature:
+            "PAPER_SELL",
 
-        reason =
-          "STOP_LOSS";
-      }
-      else if (
-        pnlBps >=
-        targetBps
-      ) {
-        wouldAction =
-          "SELL";
+          reason:
+            "PAPER_TARGET"
+        });
 
-        reason =
-          "PROFIT_TARGET";
-      }
-
-
-      return {
+      events.push({
         slotId:
           position.slot_id,
 
-        positionId:
-          position.id,
+        action:
+          "SELL",
 
-        entryPrice,
+        reason:
+          "TARGET_PROFIT",
 
-        currentPrice,
+        pnlPct:
+          closed
+            .realized_pnl_pct
+      });
 
-        pnlBps:
-          Number(
-            pnlBps.toFixed(2)
-          ),
-
-        targetBps,
-
-        wouldAction,
-
-        reason
-      };
+      continue;
     }
-  );
+
+    events.push({
+      slotId:
+        position.slot_id,
+
+      action:
+        "HOLD",
+
+      pnlBps:
+        Number(
+          pnlBps.toFixed(2)
+        )
+    });
+  }
+
+  return events;
 }
 
+async function tryPaperEntry({
+  walletAddress,
+  signal,
+  positions,
+  recentTrades,
+  targetBps,
+  currentPrice
+}) {
+  if (
+    String(
+      signal.action
+    ).toUpperCase() !==
+    "BUY"
+  ) {
+    return {
+      opened: false,
+      reason:
+        "NO_BUY_SIGNAL"
+    };
+  }
 
-// ======================================================
-// MAIN
-// ======================================================
+  const slotId =
+    await getFreeSlot(
+      walletAddress,
+      CONFIG.maxSlots
+    );
+
+  if (!slotId) {
+    return {
+      opened: false,
+      reason:
+        "NO_FREE_SLOT"
+    };
+  }
+
+  const riskMode =
+    getDynamicRiskMode(
+      recentTrades
+    );
+
+  const riskState = {
+    totalCapitalUsd:
+      25,
+
+    recentTrades,
+
+    slots:
+      positions.map(
+        (position) => ({
+          id:
+            position.slot_id,
+
+          status:
+            "OPEN",
+
+          amountUsd:
+            num(
+              position.entry_usdc
+            )
+        })
+      )
+  };
+
+  const candidate = {
+    amountUsd:
+      CONFIG.slotUsd,
+
+    expectedMoveBps:
+      targetBps,
+
+    estimatedSlippageBps:
+      CONFIG
+        .estimatedSlippageBps,
+
+    buyFeeBps: 0,
+
+    sellFeeBps: 0
+  };
+
+  const risk =
+    evaluateRisk({
+      state:
+        riskState,
+
+      candidate,
+
+      config: {
+        maxOpenSlots:
+          CONFIG.maxSlots,
+
+        minNetEdgeBps:
+          CONFIG.minNetEdgeBps
+      }
+    });
+
+  if (!risk.allowed) {
+    return {
+      opened: false,
+      reason:
+        risk.reason,
+      risk
+    };
+  }
+
+  const entryUsdc =
+    CONFIG.slotUsd;
+
+  const entrySol =
+    entryUsdc /
+    currentPrice;
+
+  const trailingDistanceBps =
+    Math.max(
+      8,
+      Math.round(
+        targetBps *
+          CONFIG
+            .trailingDistanceRatio
+      )
+    );
+
+  const position =
+    await openPosition({
+      walletAddress,
+
+      slotId,
+
+      entryPrice:
+        currentPrice,
+
+      entrySol,
+
+      entryUsdc,
+
+      signature:
+        "PAPER_BUY",
+
+      strategy:
+        "PAPER_MICRO_SCALP",
+
+      targetBps,
+
+      trailingDistanceBps
+    });
+
+  return {
+    opened: true,
+
+    paper: true,
+
+    slotId,
+
+    positionId:
+      position.id,
+
+    entryPrice:
+      currentPrice,
+
+    entryUsdc,
+
+    entrySol,
+
+    targetBps,
+
+    riskMode
+  };
+}
 
 export default async function handler(
   req,
@@ -453,67 +667,22 @@ export default async function handler(
       .status(405)
       .json({
         status: "error",
-
-        engine:
-          "FAWAZ_DRY_RUN_V1",
-
         message:
           "GET or POST only"
       });
   }
 
-
-  const auth =
-    authorize(req);
-
-  if (!auth.ok) {
-    return res
-      .status(auth.status)
-      .json({
-        status: "error",
-
-        engine:
-          "FAWAZ_DRY_RUN_V1",
-
-        message:
-          auth.reason
-      });
-  }
-
-
   try {
-
-    // ==================================================
-    // WALLET
-    // ==================================================
-
     const walletAddress =
       getWalletAddress();
 
-
-    // ==================================================
-    // SIGNAL
-    // ==================================================
-
-    const signalData =
-      await loadSignal(req);
-
     const signal =
-      signalData.signal;
-
-
-    const action =
-      String(
-        signal.action ||
-        "WAIT"
-      ).toUpperCase();
-
+      await loadSignal(req);
 
     const currentPrice =
       num(
         signal.currentPrice
       );
-
 
     if (
       currentPrice <= 0
@@ -523,13 +692,8 @@ export default async function handler(
       );
     }
 
-
-    // ==================================================
-    // DATABASE
-    // ==================================================
-
     const [
-      positions,
+      positionsBefore,
       recentTrades
     ] =
       await Promise.all([
@@ -543,20 +707,10 @@ export default async function handler(
         )
       ]);
 
-
-    // ==================================================
-    // RISK MODE
-    // ==================================================
-
     const riskMode =
       getDynamicRiskMode(
         recentTrades
       );
-
-
-    // ==================================================
-    // TARGET
-    // ==================================================
 
     const targetBps =
       getDynamicTarget(
@@ -564,190 +718,39 @@ export default async function handler(
         riskMode
       );
 
+    const positionEvents =
+      await managePositions({
+        positions:
+          positionsBefore,
 
-    // ==================================================
-    // EXISTING POSITIONS PREVIEW
-    // ==================================================
-
-    const positionPreview =
-      previewPositions(
-        positions,
         currentPrice
+      });
+
+    const positionsAfterExit =
+      await getOpenPositions(
+        walletAddress
       );
 
-
-    // ==================================================
-    // FREE SLOT
-    // ==================================================
-
-    const freeSlot =
-      await getFreeSlot(
+    const entryResult =
+      await tryPaperEntry({
         walletAddress,
-        CONFIG.maxSlots
-      );
 
+        signal,
 
-    // ==================================================
-    // DEFAULT ENTRY RESULT
-    // ==================================================
-
-    let entryPreview = {
-      requested:
-        false,
-
-      allowed:
-        false,
-
-      wouldExecute:
-        false,
-
-      reason:
-        "NO_BUY_SIGNAL"
-    };
-
-
-    // ==================================================
-    // BUY CANDIDATE
-    // ==================================================
-
-    if (
-      action === "BUY"
-    ) {
-
-      const estimatedSlippageBps =
-        Math.max(
-          4,
-
-          Math.ceil(
-            num(
-              signal.spreadBps
-            ) / 2
-          )
-        );
-
-
-      const riskState = {
-        totalCapitalUsd:
-          25,
+        positions:
+          positionsAfterExit,
 
         recentTrades,
 
-        slots:
-          positions.map(
-            (position) => ({
-              id:
-                position.slot_id,
-
-              status:
-                "OPEN",
-
-              amountUsd:
-                num(
-                  position.entry_usdc
-                )
-            })
-          )
-      };
-
-
-      const candidate = {
-        amountUsd:
-          CONFIG.slotUsd,
-
-        expectedMoveBps:
-          targetBps,
-
-        estimatedSlippageBps,
-
-        buyFeeBps: 0,
-
-        sellFeeBps: 0
-      };
-
-
-      const risk =
-        evaluateRisk({
-          state:
-            riskState,
-
-          candidate,
-
-          config: {
-            maxOpenSlots:
-              CONFIG.maxSlots,
-
-            maxSlippageBps:
-              CONFIG.maxSlippageBps,
-
-            minNetEdgeBps:
-              CONFIG.minNetEdgeBps
-          }
-        });
-
-
-      entryPreview = {
-        requested:
-          true,
-
-        allowed:
-          risk.allowed === true,
-
-        wouldExecute:
-          risk.allowed === true &&
-          freeSlot !== null,
-
-        slotId:
-          freeSlot,
-
-        amountUsd:
-          CONFIG.slotUsd,
-
         targetBps,
 
-        estimatedSlippageBps,
-
-        risk
-      };
-
-
-      if (
-        freeSlot === null
-      ) {
-        entryPreview.allowed =
-          false;
-
-        entryPreview.wouldExecute =
-          false;
-
-        entryPreview.reason =
-          "NO_FREE_SLOT";
-      }
-      else if (
-        risk.allowed
-      ) {
-        entryPreview.reason =
-          "DRY_RUN_BUY_APPROVED";
-      }
-      else {
-        entryPreview.reason =
-          risk.reason;
-      }
-    }
-
-
-    // ==================================================
-    // DASHBOARD
-    // ==================================================
+        currentPrice
+      });
 
     const dashboard =
       await getTradingDashboard(
         walletAddress
       );
-
-
-    // ==================================================
-    // RESPONSE
-    // ==================================================
 
     return res
       .status(200)
@@ -755,25 +758,20 @@ export default async function handler(
         status: "ok",
 
         engine:
-          "FAWAZ_DRY_RUN_V1",
+          "FAWAZ_PAPER_SCALPER_V1",
 
-        dryRun: true,
+        paperTrading:
+          true,
 
         realTrading:
           false,
 
-        message:
-          "SAFE MODE - no Jupiter transaction can be executed",
-
-        walletAddress,
-
         signal: {
-          action,
+          action:
+            signal.action,
 
           confidence:
-            num(
-              signal.confidence
-            ),
+            signal.confidence,
 
           reason:
             signal.reason,
@@ -791,19 +789,9 @@ export default async function handler(
 
         targetBps,
 
-        slots: {
-          max:
-            CONFIG.maxSlots,
+        positionEvents,
 
-          open:
-            positions.length,
-
-          freeSlot
-        },
-
-        positionPreview,
-
-        entryPreview,
+        entryResult,
 
         dashboard,
 
@@ -813,12 +801,10 @@ export default async function handler(
       });
 
   } catch (error) {
-
     console.error(
-      "Dry Run Orchestrator Error:",
+      "Paper Scalper Error:",
       error
     );
-
 
     return res
       .status(500)
@@ -826,20 +812,17 @@ export default async function handler(
         status: "error",
 
         engine:
-          "FAWAZ_DRY_RUN_V1",
+          "FAWAZ_PAPER_SCALPER_V1",
 
-        dryRun: true,
+        paperTrading:
+          true,
 
         realTrading:
           false,
 
         message:
           error?.message ||
-          "Dry run failed",
-
-        timestamp:
-          new Date()
-            .toISOString()
+          "Paper scalper failed"
       });
   }
 }
