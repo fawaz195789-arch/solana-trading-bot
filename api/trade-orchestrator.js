@@ -4,7 +4,7 @@ import {
   closePosition,
   get24HourStats,
   getAllTimeStats
-} from "./trading-store.js";
+} from "../lib/trading-store.js";
 
 const USDC_MINT =
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
