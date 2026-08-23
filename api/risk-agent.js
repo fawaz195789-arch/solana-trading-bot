@@ -1,7 +1,7 @@
 const SOL_FLOOR = 0.1;
 
-const MAX_BUY_USDC = 0.5;
-const MAX_SELL_SOL = 0.005;
+const MAX_BUY_USDC = 5;
+const MAX_SELL_SOL = 1;
 
 const MAX_VOLATILITY = 1.5;
 const MAX_MOMENTUM = 3;
@@ -26,30 +26,14 @@ export default async function handler(req, res) {
       volatility = 0
     } = req.body || {};
 
-    const side =
-      String(decision || "").toUpperCase();
+    const side = String(decision || "").toUpperCase();
 
-    const confidenceNumber =
-      Number(confidence);
-
-    const amountNumber =
-      Number(amount);
-
-    const sol =
-      Number(solBalance);
-
-    const usdc =
-      Number(usdcBalance);
-
-    const momentumNumber =
-      Number(momentum);
-
-    const volatilityNumber =
-      Number(volatility);
-
-    // =========================
-    // VALIDATION
-    // =========================
+    const confidenceNumber = Number(confidence);
+    const amountNumber = Number(amount);
+    const sol = Number(solBalance);
+    const usdc = Number(usdcBalance);
+    const momentumNumber = Number(momentum);
+    const volatilityNumber = Number(volatility);
 
     if (
       side !== "BUY" &&
@@ -99,14 +83,9 @@ export default async function handler(req, res) {
       });
     }
 
-    // =========================
-    // MARKET RISK
-    // =========================
-
     if (
       Number.isFinite(momentumNumber) &&
-      Math.abs(momentumNumber) >
-        MAX_MOMENTUM
+      Math.abs(momentumNumber) > MAX_MOMENTUM
     ) {
       return res.status(200).json({
         status: "ok",
@@ -118,8 +97,7 @@ export default async function handler(req, res) {
 
     if (
       Number.isFinite(volatilityNumber) &&
-      volatilityNumber >
-        MAX_VOLATILITY
+      volatilityNumber > MAX_VOLATILITY
     ) {
       return res.status(200).json({
         status: "ok",
@@ -130,7 +108,7 @@ export default async function handler(req, res) {
     }
 
     // =========================
-    // BUY RISK
+    // BUY
     // =========================
 
     if (side === "BUY") {
@@ -155,7 +133,7 @@ export default async function handler(req, res) {
     }
 
     // =========================
-    // SELL RISK
+    // SELL
     // =========================
 
     if (side === "SELL") {
@@ -191,10 +169,6 @@ export default async function handler(req, res) {
         });
       }
     }
-
-    // =========================
-    // APPROVED
-    // =========================
 
     return res.status(200).json({
       status: "ok",
