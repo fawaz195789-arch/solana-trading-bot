@@ -4,20 +4,66 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FAWAZ AI BOT</title>
+
   <script src="https://unpkg.com/@solana/web3.js@1.98.4/lib/index.iife.min.js"></script>
 
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #111; }
-    .card { max-width: 560px; }
-    button { margin: 6px; padding: 10px 14px; cursor: pointer; }
-    .status { margin-top: 14px; font-weight: 700; }
-    .quote { margin-top: 14px; padding: 12px; background: #f3f4f6; border-radius: 8px; }
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #fff;
+      color: #111;
+    }
+
+    .card {
+      max-width: 620px;
+    }
+
+    button {
+      margin: 6px;
+      padding: 11px 16px;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .status {
+      margin-top: 14px;
+      font-weight: 700;
+    }
+
+    .panel {
+      margin-top: 14px;
+      padding: 14px;
+      background: #f3f4f6;
+      border-radius: 10px;
+      line-height: 1.8;
+      white-space: pre-wrap;
+    }
+
+    .buy {
+      color: green;
+      font-weight: 700;
+    }
+
+    .sell {
+      color: red;
+      font-weight: 700;
+    }
+
+    .hold {
+      color: #555;
+      font-weight: 700;
+    }
   </style>
 </head>
 
 <body>
   <div class="card">
-    <h3>⚡ على سولانا DEX تداول</h3>
+    <h2>⚡ FAWAZ AI DEX TRADER</h2>
 
     <div>
       <b>المحفظة:</b>
@@ -26,32 +72,39 @@
 
     <br />
 
-    <button id="connectButton" type="button">ربط محفظة OKX</button>
-    <button id="testButton" type="button" disabled>اختبار الاتصال</button>
+    <button id="connectButton" type="button">
+      ربط محفظة OKX
+    </button>
 
-    <div class="status" id="dexStatus">بانتظار ربط المحفظة</div>
+    <button id="runAgentsButton" type="button" disabled>
+      تشغيل الوكلاء
+    </button>
+
+    <div class="status" id="status">
+      بانتظار ربط المحفظة
+    </div>
 
     <hr />
 
-    <h3>اختبار صفقة حقيقية محدود</h3>
-    <p>0.01 SOL إلى USDC فقط. لا يتم التنفيذ إلا بعد موافقتك في OKX.</p>
+    <h3>قرار التداول</h3>
 
-    <button id="quoteButton" type="button" disabled>عرض سعر 0.01 SOL</button>
-    <button id="executeButton" type="button" disabled>تأكيد وإرسال الصفقة</button>
+    <div class="panel" id="decisionPanel">
+      لم يتم تشغيل الوكلاء بعد.
+    </div>
 
-    <div class="quote" id="quoteDetails">
-      اطلب السعر أولًا.
+    <button id="approveButton" type="button" disabled>
+      موافقة وتنفيذ الصفقة
+    </button>
+
+    <div class="panel" id="executionPanel">
+      لا توجد صفقة جاهزة للتنفيذ.
     </div>
   </div>
 
   <script>
-    const SOL_MINT = "So11111111111111111111111111111111111111112";
-    const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-    const AMOUNT_LAMPORTS = "10000000";
-
     let connectedAddress = "";
-    let pendingOrder = null;
-    let orderCreatedAt = 0;
+    let pendingSwapTransaction = null;
+    let pendingDecision = null;
 
     function getOKXProvider() {
       return window.okxwallet && window.okxwallet.solana
@@ -61,185 +114,381 @@
 
     function base64ToBytes(value) {
       const binary = atob(value);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
+
+      const bytes =
+        new Uint8Array(binary.length);
+
+      for (
+        let i = 0;
+        i < binary.length;
+        i++
+      ) {
+        bytes[i] =
+          binary.charCodeAt(i);
       }
+
       return bytes;
     }
 
-    function bytesToBase64(bytes) {
-      let binary = "";
-      bytes.forEach(function (byte) {
-        binary += String.fromCharCode(byte);
-      });
-      return btoa(binary);
-    }
-
     async function connectOKXWallet() {
-      const status = document.getElementById("dexStatus");
-      const wallet = document.getElementById("walletAddress");
-      const provider = getOKXProvider();
+      const status =
+        document.getElementById("status");
+
+      const walletLabel =
+        document.getElementById(
+          "walletAddress"
+        );
+
+      const provider =
+        getOKXProvider();
 
       if (!provider) {
-        status.textContent = "افتح الصفحة من متصفح OKX Wallet.";
+        status.textContent =
+          "افتح الصفحة من متصفح OKX Wallet.";
         return;
       }
 
       try {
-        status.textContent = "بانتظار موافقة محفظة OKX...";
-        const result = await provider.connect();
-        const publicKey = result && result.publicKey
-          ? result.publicKey
-          : provider.publicKey;
+        status.textContent =
+          "بانتظار موافقة محفظة OKX...";
 
-        connectedAddress = publicKey ? publicKey.toString() : "";
+        const result =
+          await provider.connect();
+
+        const publicKey =
+          result && result.publicKey
+            ? result.publicKey
+            : provider.publicKey;
+
+        connectedAddress =
+          publicKey
+            ? publicKey.toString()
+            : "";
 
         if (!connectedAddress) {
-          throw new Error("لم يتم استلام عنوان المحفظة");
+          throw new Error(
+            "لم يتم استلام عنوان المحفظة"
+          );
         }
 
-        wallet.textContent =
-          connectedAddress.slice(0, 6) + "..." + connectedAddress.slice(-4);
+        walletLabel.textContent =
+          connectedAddress.slice(0, 6) +
+          "..." +
+          connectedAddress.slice(-4);
 
-        status.textContent = "✅ تم ربط محفظة OKX بنجاح";
-        document.getElementById("testButton").disabled = false;
-        document.getElementById("quoteButton").disabled = false;
+        status.textContent =
+          "✅ تم ربط محفظة OKX";
+
+        document.getElementById(
+          "runAgentsButton"
+        ).disabled = false;
+
       } catch (error) {
-        status.textContent = "❌ لم يكتمل الربط: " + (error.message || "تم الإلغاء");
+        status.textContent =
+          "❌ فشل الربط: " +
+          (
+            error.message ||
+            "تم الإلغاء"
+          );
       }
     }
 
-    function testConnection() {
-      document.getElementById("dexStatus").textContent =
-        connectedAddress
-          ? "✅ الاتصال سليم، ولم تُنفذ أي صفقة أو عملية سحب."
-          : "اربط المحفظة أولًا.";
-    }
+    async function runAgents() {
+      const status =
+        document.getElementById("status");
 
-    async function requestQuote() {
-      const status = document.getElementById("dexStatus");
-      const details = document.getElementById("quoteDetails");
+      const decisionPanel =
+        document.getElementById(
+          "decisionPanel"
+        );
+
+      const executionPanel =
+        document.getElementById(
+          "executionPanel"
+        );
+
+      const approveButton =
+        document.getElementById(
+          "approveButton"
+        );
 
       if (!connectedAddress) {
-        status.textContent = "اربط المحفظة أولًا.";
+        status.textContent =
+          "اربط المحفظة أولًا.";
         return;
       }
+
+      pendingSwapTransaction = null;
+      pendingDecision = null;
+
+      approveButton.disabled = true;
 
       try {
-        status.textContent = "جارٍ طلب سعر 0.01 SOL...";
-        details.textContent = "جارٍ جلب أفضل سعر من Jupiter...";
-
-        const params = new URLSearchParams({
-          inputMint: SOL_MINT,
-          outputMint: USDC_MINT,
-          amount: AMOUNT_LAMPORTS,
-          taker: connectedAddress
-        });
-
-        const response = await fetch(
-          "https://api.jup.ag/swap/v2/order?" + params.toString()
-        );
-
-        const data = await response.json();
-
-        if (!response.ok || !data.transaction || !data.requestId) {
-          throw new Error(data.errorMessage || "لم يصل عرض صالح");
-        }
-
-        pendingOrder = data;
-        orderCreatedAt = Date.now();
-
-        const expectedUSDC = Number(data.outAmount || 0) / 1000000;
-
-        details.textContent =
-          "سيتم إرسال 0.01 SOL. المتوقع استلامه تقريبًا: " +
-          expectedUSDC.toFixed(6) +
-          " USDC. العرض صالح لفترة قصيرة فقط.";
-
         status.textContent =
-          "✅ السعر جاهز. راجعه ثم اضغط تأكيد وإرسال الصفقة.";
-        document.getElementById("executeButton").disabled = false;
-      } catch (error) {
-        pendingOrder = null;
-        document.getElementById("executeButton").disabled = true;
-        status.textContent =
-          "❌ تعذر جلب السعر: " + (error.message || "حاول مرة أخرى");
-        details.textContent = "لم يتم تنفيذ أي شيء.";
-      }
-    }
+          "🤖 الوكلاء يحللون السوق...";
 
-    async function executeSwap() {
-      const status = document.getElementById("dexStatus");
-      const details = document.getElementById("quoteDetails");
-      const provider = getOKXProvider();
+        decisionPanel.textContent =
+          "جارٍ تحليل السوق والمخاطر...";
 
-      if (!pendingOrder || !provider) {
-        status.textContent = "اطلب سعرًا جديدًا أولًا.";
-        return;
-      }
+        executionPanel.textContent =
+          "بانتظار قرار الوكلاء.";
 
-      if (Date.now() - orderCreatedAt > 50000) {
-        pendingOrder = null;
-        document.getElementById("executeButton").disabled = true;
-        status.textContent = "انتهت صلاحية العرض. اضغط عرض السعر مرة أخرى.";
-        return;
-      }
+        const response =
+          await fetch(
+            "/api/trade-orchestrator",
+            {
+              method: "POST",
 
-      try {
-        status.textContent = "ستظهر الآن موافقة OKX. راجع 0.01 SOL → USDC فقط.";
+              headers: {
+                "Content-Type":
+                  "application/json"
+              },
 
-        const transaction =
-          solanaWeb3.VersionedTransaction.deserialize(
-            base64ToBytes(pendingOrder.transaction)
+              body: JSON.stringify({
+                walletAddress:
+                  connectedAddress
+              })
+            }
           );
 
-        const signedTransaction = await provider.signTransaction(transaction);
+        const data =
+          await response.json();
 
-        status.textContent = "جارٍ إرسال العملية إلى Jupiter...";
-
-        const response = await fetch(
-          "https://api.jup.ag/swap/v2/execute",
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              signedTransaction: bytesToBase64(signedTransaction.serialize()),
-              requestId: pendingOrder.requestId
-            })
-          }
-        );
-
-        const result = await response.json();
-
-        if (!response.ok || result.status !== "Success") {
-          throw new Error(result.error || "لم تكتمل العملية");
+        if (!response.ok) {
+          throw new Error(
+            data.message ||
+            "فشل تشغيل الوكلاء"
+          );
         }
 
-        status.textContent = "✅ تمت الصفقة بنجاح";
-        details.textContent =
-          "تم تحويل 0.01 SOL إلى USDC. رقم العملية: " + result.signature;
+        const decision =
+          String(
+            data.decision || ""
+          ).toUpperCase();
 
-        pendingOrder = null;
-        document.getElementById("executeButton").disabled = true;
+        const market =
+          data.market || {};
+
+        const balances =
+          data.balances || {};
+
+        const reason =
+          data.reason ||
+          data.risk?.reason ||
+          "";
+
+        let decisionClass =
+          "hold";
+
+        if (decision === "BUY") {
+          decisionClass = "buy";
+        }
+
+        if (decision === "SELL") {
+          decisionClass = "sell";
+        }
+
+        decisionPanel.innerHTML =
+          "القرار: <span class=\"" +
+          decisionClass +
+          "\">" +
+          decision +
+          "</span>" +
+          "\nالثقة: " +
+          (data.confidence ?? "-") +
+          "%" +
+          "\nالسعر الحالي: " +
+          (market.currentPrice ?? "-") +
+          "\nSMA10: " +
+          (market.sma10 ?? "-") +
+          "\nSMA30: " +
+          (market.sma30 ?? "-") +
+          "\nMomentum: " +
+          (market.momentum ?? "-") +
+          "%" +
+          "\nVolatility: " +
+          (market.volatility ?? "-") +
+          "%" +
+          "\nSOL: " +
+          (balances.solBalance ?? "-") +
+          "\nUSDC: " +
+          (balances.usdcBalance ?? "-") +
+          "\nالسبب: " +
+          reason;
+
+        if (
+          decision === "HOLD" ||
+          data.status === "blocked"
+        ) {
+          status.textContent =
+            decision === "HOLD"
+              ? "⏸️ لا توجد صفقة الآن"
+              : "🛡️ وكيل المخاطر منع الصفقة";
+
+          executionPanel.textContent =
+            data.risk?.reason ||
+            data.message ||
+            "لا توجد صفقة جاهزة.";
+
+          return;
+        }
+
+        const swapTransaction =
+          data.execution
+            ?.swapTransaction;
+
+        if (!swapTransaction) {
+          throw new Error(
+            "لم تصل معاملة صالحة من Execution Agent"
+          );
+        }
+
+        pendingSwapTransaction =
+          swapTransaction;
+
+        pendingDecision =
+          decision;
+
+        approveButton.disabled = false;
+
+        executionPanel.textContent =
+          "✅ صفقة " +
+          decision +
+          " جاهزة.\n" +
+          "راجعها ثم اضغط موافقة وتنفيذ.";
+
+        status.textContent =
+          "✅ الوكلاء وافقوا على الصفقة";
+
       } catch (error) {
         status.textContent =
-          "❌ لم تُنفذ الصفقة أو تم إلغاؤها: " +
-          (error.message || "حاول من جديد");
+          "❌ خطأ: " +
+          (
+            error.message ||
+            "تعذر تشغيل النظام"
+          );
+
+        decisionPanel.textContent =
+          "تعذر الحصول على قرار.";
+
+        executionPanel.textContent =
+          "لم يتم تنفيذ أي شيء.";
       }
     }
 
-    document.getElementById("connectButton")
-      .addEventListener("click", connectOKXWallet);
+    async function approveAndExecute() {
+      const status =
+        document.getElementById("status");
 
-    document.getElementById("testButton")
-      .addEventListener("click", testConnection);
+      const executionPanel =
+        document.getElementById(
+          "executionPanel"
+        );
 
-    document.getElementById("quoteButton")
-      .addEventListener("click", requestQuote);
+      const provider =
+        getOKXProvider();
 
-    document.getElementById("executeButton")
-      .addEventListener("click", executeSwap);
+      if (
+        !provider ||
+        !pendingSwapTransaction
+      ) {
+        status.textContent =
+          "لا توجد صفقة جاهزة.";
+        return;
+      }
+
+      try {
+        status.textContent =
+          "📲 ستظهر موافقة OKX الآن...";
+
+        const transaction =
+          solanaWeb3.VersionedTransaction
+            .deserialize(
+              base64ToBytes(
+                pendingSwapTransaction
+              )
+            );
+
+        const signedTransaction =
+          await provider.signTransaction(
+            transaction
+          );
+
+        status.textContent =
+          "تم التوقيع. جارٍ إرسال المعاملة إلى شبكة Solana...";
+
+        const connection =
+          new solanaWeb3.Connection(
+            "https://api.mainnet-beta.solana.com",
+            "confirmed"
+          );
+
+        const signature =
+          await connection.sendRawTransaction(
+            signedTransaction.serialize(),
+            {
+              skipPreflight: false,
+              maxRetries: 3
+            }
+          );
+
+        executionPanel.textContent =
+          "جارٍ تأكيد المعاملة...\n" +
+          "Signature:\n" +
+          signature;
+
+        await connection.confirmTransaction(
+          signature,
+          "confirmed"
+        );
+
+        status.textContent =
+          "✅ تم تنفيذ الصفقة بنجاح";
+
+        executionPanel.textContent =
+          "✅ تم تنفيذ " +
+          pendingDecision +
+          " بنجاح.\n\n" +
+          "Signature:\n" +
+          signature;
+
+        pendingSwapTransaction = null;
+        pendingDecision = null;
+
+        document.getElementById(
+          "approveButton"
+        ).disabled = true;
+
+      } catch (error) {
+        status.textContent =
+          "❌ لم تكتمل الصفقة: " +
+          (
+            error.message ||
+            "تم الإلغاء أو فشل التنفيذ"
+          );
+      }
+    }
+
+    document.getElementById(
+      "connectButton"
+    ).addEventListener(
+      "click",
+      connectOKXWallet
+    );
+
+    document.getElementById(
+      "runAgentsButton"
+    ).addEventListener(
+      "click",
+      runAgents
+    );
+
+    document.getElementById(
+      "approveButton"
+    ).addEventListener(
+      "click",
+      approveAndExecute
+    );
   </script>
 </body>
 </html>
