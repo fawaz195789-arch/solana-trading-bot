@@ -2,493 +2,1003 @@
 <html lang="ar" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FAWAZ AI BOT</title>
 
-  <script src="https://unpkg.com/@solana/web3.js@1.98.4/lib/index.iife.min.js"></script>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+  />
+
+  <title>FAWAZ AI DEX TRADER</title>
 
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       font-family: Arial, sans-serif;
-      margin: 20px;
-      background: #fff;
+      margin: 0;
+      padding: 20px;
+      background: #f7f7f8;
       color: #111;
     }
 
-    .card {
-      max-width: 620px;
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
     }
 
-    button {
-      margin: 6px;
-      padding: 11px 16px;
-      cursor: pointer;
+    .header {
+      background: #fff;
+      border-radius: 18px;
+      padding: 20px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.06);
     }
 
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+
+    h2 {
+      margin-top: 0;
+    }
+
+    .wallet {
+      margin-top: 12px;
+      font-size: 15px;
+      word-break: break-all;
     }
 
     .status {
-      margin-top: 14px;
+      margin-top: 12px;
+      padding: 12px;
+      background: #f3f4f6;
+      border-radius: 10px;
       font-weight: 700;
     }
 
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .stat {
+      background: #fff;
+      border-radius: 16px;
+      padding: 16px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+
+    .stat-title {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 8px;
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: 800;
+    }
+
+    .positive {
+      color: green;
+    }
+
+    .negative {
+      color: red;
+    }
+
+    .neutral {
+      color: #555;
+    }
+
     .panel {
-      margin-top: 14px;
-      padding: 14px;
-      background: #f3f4f6;
-      border-radius: 10px;
-      line-height: 1.8;
-      white-space: pre-wrap;
+      background: #fff;
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+      line-height: 1.9;
+    }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      border-bottom: 1px solid #eee;
+      padding: 7px 0;
+    }
+
+    .row:last-child {
+      border-bottom: 0;
     }
 
     .buy {
       color: green;
-      font-weight: 700;
+      font-weight: 800;
     }
 
     .sell {
       color: red;
-      font-weight: 700;
+      font-weight: 800;
     }
 
     .hold {
       color: #555;
+      font-weight: 800;
+    }
+
+    button {
+      width: 100%;
+      border: 0;
+      border-radius: 14px;
+      padding: 15px;
+      font-size: 17px;
       font-weight: 700;
+      cursor: pointer;
+      margin-bottom: 12px;
+    }
+
+    #runButton {
+      background: #111;
+      color: #fff;
+    }
+
+    #runButton:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .small {
+      color: #666;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 520px) {
+      .grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .stat-value {
+        font-size: 20px;
+      }
+
+      h1 {
+        font-size: 23px;
+      }
     }
   </style>
 </head>
 
 <body>
-  <div class="card">
-    <h2>⚡ FAWAZ AI DEX TRADER</h2>
 
-    <div>
-      <b>المحفظة:</b>
-      <span id="walletAddress">غير متصلة</span>
+<div class="container">
+
+  <div class="header">
+    <h1>⚡ FAWAZ AI DEX TRADER</h1>
+
+    <div class="wallet">
+      <b>محفظة البوت:</b>
+      <span id="walletAddress"></span>
     </div>
 
-    <br />
-
-    <button id="connectButton" type="button">
-      ربط محفظة OKX
-    </button>
-
-    <button id="runAgentsButton" type="button" disabled>
-      تشغيل الوكلاء
-    </button>
-
-    <div class="status" id="status">
-      بانتظار ربط المحفظة
-    </div>
-
-    <hr />
-
-    <h3>قرار التداول</h3>
-
-    <div class="panel" id="decisionPanel">
-      لم يتم تشغيل الوكلاء بعد.
-    </div>
-
-    <button id="approveButton" type="button" disabled>
-      موافقة وتنفيذ الصفقة
-    </button>
-
-    <div class="panel" id="executionPanel">
-      لا توجد صفقة جاهزة للتنفيذ.
+    <div
+      class="status"
+      id="botStatus"
+    >
+      🟢 البوت جاهز
     </div>
   </div>
 
-  <script>
-    let connectedAddress = "";
-    let pendingSwapTransaction = null;
-    let pendingDecision = null;
 
-    function getOKXProvider() {
-      return window.okxwallet && window.okxwallet.solana
-        ? window.okxwallet.solana
-        : null;
+  <!-- ========================= -->
+  <!-- PROFIT DASHBOARD -->
+  <!-- ========================= -->
+
+  <div class="grid">
+
+    <div class="stat">
+      <div class="stat-title">
+        ربح آخر 24 ساعة
+      </div>
+
+      <div
+        id="dayPnl"
+        class="stat-value"
+      >
+        0.000 USDC
+      </div>
+    </div>
+
+
+    <div class="stat">
+      <div class="stat-title">
+        الربح الإجمالي
+      </div>
+
+      <div
+        id="totalPnl"
+        class="stat-value"
+      >
+        0.000 USDC
+      </div>
+    </div>
+
+
+    <div class="stat">
+      <div class="stat-title">
+        صفقات 24 ساعة
+      </div>
+
+      <div
+        id="dayTrades"
+        class="stat-value"
+      >
+        0
+      </div>
+    </div>
+
+
+    <div class="stat">
+      <div class="stat-title">
+        نسبة النجاح
+      </div>
+
+      <div
+        id="winRate"
+        class="stat-value"
+      >
+        0%
+      </div>
+    </div>
+
+  </div>
+
+
+  <!-- ========================= -->
+  <!-- BALANCES -->
+  <!-- ========================= -->
+
+  <div class="panel">
+
+    <h2>
+      💰 المحفظة
+    </h2>
+
+    <div class="row">
+      <span>SOL</span>
+      <b id="solBalance">-</b>
+    </div>
+
+    <div class="row">
+      <span>USDC</span>
+      <b id="usdcBalance">-</b>
+    </div>
+
+  </div>
+
+
+  <!-- ========================= -->
+  <!-- CURRENT DECISION -->
+  <!-- ========================= -->
+
+  <div class="panel">
+
+    <h2>
+      🤖 قرار البوت
+    </h2>
+
+    <div class="row">
+      <span>القرار</span>
+
+      <span
+        id="decision"
+        class="hold"
+      >
+        -
+      </span>
+    </div>
+
+    <div class="row">
+      <span>الثقة</span>
+      <b id="confidence">-</b>
+    </div>
+
+    <div class="row">
+      <span>السبب</span>
+      <b id="reason">-</b>
+    </div>
+
+  </div>
+
+
+  <!-- ========================= -->
+  <!-- MARKET -->
+  <!-- ========================= -->
+
+  <div class="panel">
+
+    <h2>
+      📊 السوق
+    </h2>
+
+    <div class="row">
+      <span>سعر SOL</span>
+      <b id="price">-</b>
+    </div>
+
+    <div class="row">
+      <span>SMA10</span>
+      <b id="sma10">-</b>
+    </div>
+
+    <div class="row">
+      <span>SMA30</span>
+      <b id="sma30">-</b>
+    </div>
+
+    <div class="row">
+      <span>Momentum</span>
+      <b id="momentum">-</b>
+    </div>
+
+    <div class="row">
+      <span>Volatility</span>
+      <b id="volatility">-</b>
+    </div>
+
+  </div>
+
+
+  <!-- ========================= -->
+  <!-- OPEN POSITION -->
+  <!-- ========================= -->
+
+  <div class="panel">
+
+    <h2>
+      📌 الصفقة الحالية
+    </h2>
+
+    <div
+      id="noPosition"
+      class="neutral"
+    >
+      لا توجد صفقة مفتوحة حاليًا.
+    </div>
+
+    <div
+      id="positionDetails"
+      style="display:none;"
+    >
+
+      <div class="row">
+        <span>سعر الدخول</span>
+        <b id="entryPrice">-</b>
+      </div>
+
+      <div class="row">
+        <span>قيمة الدخول</span>
+        <b id="entryUsdc">-</b>
+      </div>
+
+      <div class="row">
+        <span>كمية SOL</span>
+        <b id="entrySol">-</b>
+      </div>
+
+      <div class="row">
+        <span>الربح العائم</span>
+        <b id="floatingPnl">-</b>
+      </div>
+
+    </div>
+
+  </div>
+
+
+  <!-- ========================= -->
+  <!-- TRADING STATS -->
+  <!-- ========================= -->
+
+  <div class="panel">
+
+    <h2>
+      🧠 إحصائيات التداول
+    </h2>
+
+    <div class="row">
+      <span>الرابحة</span>
+      <b id="wins">0</b>
+    </div>
+
+    <div class="row">
+      <span>الخاسرة</span>
+      <b id="losses">0</b>
+    </div>
+
+    <div class="row">
+      <span>إجمالي الصفقات</span>
+      <b id="totalTrades">0</b>
+    </div>
+
+  </div>
+
+
+  <button
+    id="runButton"
+    type="button"
+  >
+    🔄 تشغيل دورة تداول الآن
+  </button>
+
+  <div class="small">
+    البوت الآلي يعمل من GitHub Actions بشكل مستقل.
+    هذا الزر يشغّل دورة إضافية يدويًا الآن، وقد ينفذ
+    صفقة حقيقية إذا تحققت شروط الدخول أو الخروج.
+  </div>
+
+</div>
+
+
+<script>
+
+  // =========================================
+  // BOT WALLET
+  // =========================================
+
+  const BOT_WALLET_ADDRESS =
+    "3jDHDWej98HoeAD3aYcahy1BuShKfREssnMGLYpHGski";
+
+
+  document.getElementById(
+    "walletAddress"
+  ).textContent =
+    BOT_WALLET_ADDRESS.slice(0, 7) +
+    "..." +
+    BOT_WALLET_ADDRESS.slice(-6);
+
+
+  // =========================================
+  // HELPERS
+  // =========================================
+
+  function numberValue(
+    value,
+    decimals = 3
+  ) {
+    const n =
+      Number(value);
+
+    if (!Number.isFinite(n)) {
+      return "-";
     }
 
-    function base64ToBytes(value) {
-      const binary = atob(value);
+    return n.toFixed(decimals);
+  }
 
-      const bytes =
-        new Uint8Array(binary.length);
 
-      for (
-        let i = 0;
-        i < binary.length;
-        i++
-      ) {
-        bytes[i] =
-          binary.charCodeAt(i);
-      }
+  function setPnlColor(
+    element,
+    value
+  ) {
+    const number =
+      Number(value || 0);
 
-      return bytes;
+    element.classList.remove(
+      "positive",
+      "negative",
+      "neutral"
+    );
+
+    if (number > 0) {
+      element.classList.add(
+        "positive"
+      );
+    }
+    else if (number < 0) {
+      element.classList.add(
+        "negative"
+      );
+    }
+    else {
+      element.classList.add(
+        "neutral"
+      );
+    }
+  }
+
+
+  // =========================================
+  // UPDATE DASHBOARD
+  // =========================================
+
+  function updateDashboard(data) {
+
+    const market =
+      data.market || {};
+
+    const balances =
+      data.balances || {};
+
+    const stats =
+      data.stats || {};
+
+    const day =
+      stats.last24Hours || {};
+
+    const total =
+      stats.allTime || {};
+
+
+    // =========================
+    // STATUS
+    // =========================
+
+    const botStatus =
+      document.getElementById(
+        "botStatus"
+      );
+
+    if (data.status === "error") {
+      botStatus.textContent =
+        "🔴 خطأ في البوت";
+    }
+    else if (
+      data.status === "paused"
+    ) {
+      botStatus.textContent =
+        "⏸️ التداول متوقف مؤقتًا";
+    }
+    else {
+      botStatus.textContent =
+        "🟢 البوت يعمل";
     }
 
-    async function connectOKXWallet() {
-      const status =
-        document.getElementById("status");
 
-      const walletLabel =
-        document.getElementById(
-          "walletAddress"
-        );
+    // =========================
+    // BALANCES
+    // =========================
 
-      const provider =
-        getOKXProvider();
+    document.getElementById(
+      "solBalance"
+    ).textContent =
+      numberValue(
+        balances.solBalance,
+        6
+      );
 
-      if (!provider) {
-        status.textContent =
-          "افتح الصفحة من متصفح OKX Wallet.";
-        return;
-      }
+    document.getElementById(
+      "usdcBalance"
+    ).textContent =
+      numberValue(
+        balances.usdcBalance,
+        4
+      );
 
-      try {
-        status.textContent =
-          "بانتظار موافقة محفظة OKX...";
 
-        const result =
-          await provider.connect();
+    // =========================
+    // DECISION
+    // =========================
 
-        const publicKey =
-          result && result.publicKey
-            ? result.publicKey
-            : provider.publicKey;
+    const decision =
+      String(
+        data.decision || "-"
+      ).toUpperCase();
 
-        connectedAddress =
-          publicKey
-            ? publicKey.toString()
-            : "";
+    const decisionElement =
+      document.getElementById(
+        "decision"
+      );
 
-        if (!connectedAddress) {
-          throw new Error(
-            "لم يتم استلام عنوان المحفظة"
-          );
-        }
+    decisionElement.textContent =
+      decision;
 
-        walletLabel.textContent =
-          connectedAddress.slice(0, 6) +
-          "..." +
-          connectedAddress.slice(-4);
+    decisionElement.className = "";
 
-        status.textContent =
-          "✅ تم ربط محفظة OKX";
-
-        document.getElementById(
-          "runAgentsButton"
-        ).disabled = false;
-
-      } catch (error) {
-        status.textContent =
-          "❌ فشل الربط: " +
-          (
-            error.message ||
-            "تم الإلغاء"
-          );
-      }
+    if (decision === "BUY") {
+      decisionElement.classList.add(
+        "buy"
+      );
+    }
+    else if (
+      decision === "SELL"
+    ) {
+      decisionElement.classList.add(
+        "sell"
+      );
+    }
+    else {
+      decisionElement.classList.add(
+        "hold"
+      );
     }
 
-    async function runAgents() {
-      const status =
-        document.getElementById("status");
 
-      const decisionPanel =
-        document.getElementById(
-          "decisionPanel"
+    document.getElementById(
+      "confidence"
+    ).textContent =
+      data.confidence != null
+        ? data.confidence + "%"
+        : "-";
+
+
+    document.getElementById(
+      "reason"
+    ).textContent =
+      data.reason ||
+      data.exitReason ||
+      data.message ||
+      "-";
+
+
+    // =========================
+    // MARKET
+    // =========================
+
+    document.getElementById(
+      "price"
+    ).textContent =
+      numberValue(
+        market.currentPrice,
+        4
+      );
+
+    document.getElementById(
+      "sma10"
+    ).textContent =
+      numberValue(
+        market.sma10,
+        4
+      );
+
+    document.getElementById(
+      "sma30"
+    ).textContent =
+      numberValue(
+        market.sma30,
+        4
+      );
+
+    document.getElementById(
+      "momentum"
+    ).textContent =
+      market.momentum != null
+        ? numberValue(
+            market.momentum,
+            3
+          ) + "%"
+        : "-";
+
+    document.getElementById(
+      "volatility"
+    ).textContent =
+      market.volatility != null
+        ? numberValue(
+            market.volatility,
+            3
+          ) + "%"
+        : "-";
+
+
+    // =========================
+    // DAY STATS
+    // =========================
+
+    const dayPnlElement =
+      document.getElementById(
+        "dayPnl"
+      );
+
+    dayPnlElement.textContent =
+      numberValue(
+        day.pnl || 0,
+        4
+      ) +
+      " USDC";
+
+    setPnlColor(
+      dayPnlElement,
+      day.pnl
+    );
+
+
+    document.getElementById(
+      "dayTrades"
+    ).textContent =
+      day.trades || 0;
+
+
+    document.getElementById(
+      "winRate"
+    ).textContent =
+      numberValue(
+        total.winRate || 0,
+        1
+      ) +
+      "%";
+
+
+    // =========================
+    // TOTAL STATS
+    // =========================
+
+    const totalPnlElement =
+      document.getElementById(
+        "totalPnl"
+      );
+
+    totalPnlElement.textContent =
+      numberValue(
+        total.pnl || 0,
+        4
+      ) +
+      " USDC";
+
+    setPnlColor(
+      totalPnlElement,
+      total.pnl
+    );
+
+
+    document.getElementById(
+      "wins"
+    ).textContent =
+      total.wins || 0;
+
+    document.getElementById(
+      "losses"
+    ).textContent =
+      total.losses || 0;
+
+    document.getElementById(
+      "totalTrades"
+    ).textContent =
+      total.trades || 0;
+
+
+    // =========================
+    // OPEN POSITION
+    // =========================
+
+    const position =
+      data.openPosition || null;
+
+    const noPosition =
+      document.getElementById(
+        "noPosition"
+      );
+
+    const positionDetails =
+      document.getElementById(
+        "positionDetails"
+      );
+
+
+    if (position) {
+
+      noPosition.style.display =
+        "none";
+
+      positionDetails.style.display =
+        "block";
+
+
+      document.getElementById(
+        "entryPrice"
+      ).textContent =
+        numberValue(
+          position.entry_price,
+          4
         );
 
-      const executionPanel =
-        document.getElementById(
-          "executionPanel"
+
+      document.getElementById(
+        "entryUsdc"
+      ).textContent =
+        numberValue(
+          position.entry_usdc,
+          4
+        ) +
+        " USDC";
+
+
+      document.getElementById(
+        "entrySol"
+      ).textContent =
+        numberValue(
+          position.entry_sol,
+          6
         );
 
-      const approveButton =
+
+      const floating =
+        position.currentPnlPct;
+
+
+      const floatingElement =
         document.getElementById(
-          "approveButton"
+          "floatingPnl"
         );
 
-      if (!connectedAddress) {
-        status.textContent =
-          "اربط المحفظة أولًا.";
-        return;
-      }
-
-      pendingSwapTransaction = null;
-      pendingDecision = null;
-
-      approveButton.disabled = true;
-
-      try {
-        status.textContent =
-          "🤖 الوكلاء يحللون السوق...";
-
-        decisionPanel.textContent =
-          "جارٍ تحليل السوق والمخاطر...";
-
-        executionPanel.textContent =
-          "بانتظار قرار الوكلاء.";
-
-        const response =
-          await fetch(
-            "/api/trade-orchestrator",
-            {
-              method: "POST",
-
-              headers: {
-                "Content-Type":
-                  "application/json"
-              },
-
-              body: JSON.stringify({
-                walletAddress:
-                  connectedAddress
-              })
-            }
-          );
-
-        const data =
-          await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            data.message ||
-            "فشل تشغيل الوكلاء"
-          );
-        }
-
-        const decision =
-          String(
-            data.decision || ""
-          ).toUpperCase();
-
-        const market =
-          data.market || {};
-
-        const balances =
-          data.balances || {};
-
-        const reason =
-          data.reason ||
-          data.risk?.reason ||
-          "";
-
-        let decisionClass =
-          "hold";
-
-        if (decision === "BUY") {
-          decisionClass = "buy";
-        }
-
-        if (decision === "SELL") {
-          decisionClass = "sell";
-        }
-
-        decisionPanel.innerHTML =
-          "القرار: <span class=\"" +
-          decisionClass +
-          "\">" +
-          decision +
-          "</span>" +
-          "\nالثقة: " +
-          (data.confidence ?? "-") +
-          "%" +
-          "\nالسعر الحالي: " +
-          (market.currentPrice ?? "-") +
-          "\nSMA10: " +
-          (market.sma10 ?? "-") +
-          "\nSMA30: " +
-          (market.sma30 ?? "-") +
-          "\nMomentum: " +
-          (market.momentum ?? "-") +
-          "%" +
-          "\nVolatility: " +
-          (market.volatility ?? "-") +
-          "%" +
-          "\nSOL: " +
-          (balances.solBalance ?? "-") +
-          "\nUSDC: " +
-          (balances.usdcBalance ?? "-") +
-          "\nالسبب: " +
-          reason;
-
-        if (
-          decision === "HOLD" ||
-          data.status === "blocked"
-        ) {
-          status.textContent =
-            decision === "HOLD"
-              ? "⏸️ لا توجد صفقة الآن"
-              : "🛡️ وكيل المخاطر منع الصفقة";
-
-          executionPanel.textContent =
-            data.risk?.reason ||
-            data.message ||
-            "لا توجد صفقة جاهزة.";
-
-          return;
-        }
-
-        const swapTransaction =
-          data.execution
-            ?.swapTransaction;
-
-        if (!swapTransaction) {
-          throw new Error(
-            "لم تصل معاملة صالحة من Execution Agent"
-          );
-        }
-
-        pendingSwapTransaction =
-          swapTransaction;
-
-        pendingDecision =
-          decision;
-
-        approveButton.disabled = false;
-
-        executionPanel.textContent =
-          "✅ صفقة " +
-          decision +
-          " جاهزة.\n" +
-          "راجعها ثم اضغط موافقة وتنفيذ.";
-
-        status.textContent =
-          "✅ الوكلاء وافقوا على الصفقة";
-
-      } catch (error) {
-        status.textContent =
-          "❌ خطأ: " +
-          (
-            error.message ||
-            "تعذر تشغيل النظام"
-          );
-
-        decisionPanel.textContent =
-          "تعذر الحصول على قرار.";
-
-        executionPanel.textContent =
-          "لم يتم تنفيذ أي شيء.";
-      }
-    }
-
-    async function approveAndExecute() {
-      const status =
-        document.getElementById("status");
-
-      const executionPanel =
-        document.getElementById(
-          "executionPanel"
-        );
-
-      const provider =
-        getOKXProvider();
 
       if (
-        !provider ||
-        !pendingSwapTransaction
+        floating != null
       ) {
-        status.textContent =
-          "لا توجد صفقة جاهزة.";
-        return;
-      }
 
-      try {
-        status.textContent =
-          "📲 ستظهر موافقة OKX الآن...";
+        floatingElement.textContent =
+          numberValue(
+            floating,
+            3
+          ) +
+          "%";
 
-        const transaction =
-          solanaWeb3.VersionedTransaction
-            .deserialize(
-              base64ToBytes(
-                pendingSwapTransaction
-              )
-            );
-
-        const signedTransaction =
-          await provider.signTransaction(
-            transaction
-          );
-
-        status.textContent =
-          "تم التوقيع. جارٍ إرسال المعاملة إلى شبكة Solana...";
-
-        const connection =
-          new solanaWeb3.Connection(
-            "https://api.mainnet-beta.solana.com",
-            "confirmed"
-          );
-
-        const signature =
-          await connection.sendRawTransaction(
-            signedTransaction.serialize(),
-            {
-              skipPreflight: false,
-              maxRetries: 3
-            }
-          );
-
-        executionPanel.textContent =
-          "جارٍ تأكيد المعاملة...\n" +
-          "Signature:\n" +
-          signature;
-
-        await connection.confirmTransaction(
-          signature,
-          "confirmed"
+        setPnlColor(
+          floatingElement,
+          floating
         );
 
-        status.textContent =
-          "✅ تم تنفيذ الصفقة بنجاح";
-
-        executionPanel.textContent =
-          "✅ تم تنفيذ " +
-          pendingDecision +
-          " بنجاح.\n\n" +
-          "Signature:\n" +
-          signature;
-
-        pendingSwapTransaction = null;
-        pendingDecision = null;
-
-        document.getElementById(
-          "approveButton"
-        ).disabled = true;
-
-      } catch (error) {
-        status.textContent =
-          "❌ لم تكتمل الصفقة: " +
-          (
-            error.message ||
-            "تم الإلغاء أو فشل التنفيذ"
-          );
       }
+      else {
+
+        floatingElement.textContent =
+          "-";
+
+      }
+
+    }
+    else {
+
+      noPosition.style.display =
+        "block";
+
+      positionDetails.style.display =
+        "none";
+
+    }
+  }
+
+
+  // =========================================
+  // RUN TRADING CYCLE
+  // =========================================
+
+  async function runTradingCycle() {
+
+    const button =
+      document.getElementById(
+        "runButton"
+      );
+
+    const botStatus =
+      document.getElementById(
+        "botStatus"
+      );
+
+    button.disabled = true;
+
+    button.textContent =
+      "⏳ جارٍ تحليل السوق...";
+
+    botStatus.textContent =
+      "🤖 الوكلاء يحللون السوق";
+
+
+    try {
+
+      const response =
+        await fetch(
+          "/api/trade-orchestrator",
+          {
+            method: "POST",
+
+            headers: {
+              "Content-Type":
+                "application/json"
+            },
+
+            body:
+              JSON.stringify({
+                walletAddress:
+                  BOT_WALLET_ADDRESS
+              })
+          }
+        );
+
+
+      const data =
+        await response.json();
+
+
+      if (!response.ok) {
+        throw new Error(
+          data.message ||
+          "فشل تشغيل دورة التداول"
+        );
+      }
+
+
+      updateDashboard(
+        data
+      );
+
+
+      localStorage.setItem(
+        "fawazBotLastData",
+        JSON.stringify(
+          data
+        )
+      );
+
+
+    }
+    catch (error) {
+
+      botStatus.textContent =
+        "🔴 " +
+        (
+          error.message ||
+          "تعذر الاتصال بالبوت"
+        );
+
+    }
+    finally {
+
+      button.disabled =
+        false;
+
+      button.textContent =
+        "🔄 تشغيل دورة تداول الآن";
+
+    }
+  }
+
+
+  // =========================================
+  // LOAD LAST DATA
+  // =========================================
+
+  try {
+
+    const saved =
+      localStorage.getItem(
+        "fawazBotLastData"
+      );
+
+
+    if (saved) {
+
+      updateDashboard(
+        JSON.parse(saved)
+      );
+
     }
 
-    document.getElementById(
-      "connectButton"
-    ).addEventListener(
-      "click",
-      connectOKXWallet
+  }
+  catch (error) {
+    console.log(
+      "No saved dashboard data"
     );
+  }
 
-    document.getElementById(
-      "runAgentsButton"
-    ).addEventListener(
-      "click",
-      runAgents
-    );
 
-    document.getElementById(
-      "approveButton"
-    ).addEventListener(
-      "click",
-      approveAndExecute
-    );
-  </script>
+  // =========================================
+  // BUTTON
+  // =========================================
+
+  document.getElementById(
+    "runButton"
+  ).addEventListener(
+    "click",
+    runTradingCycle
+  );
+
+</script>
+
 </body>
 </html>
