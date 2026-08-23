@@ -31,11 +31,8 @@ import {
 
 const CONFIG = {
   totalCapitalUsd: 5,
-
   maxSlots: 4,
-
   slotUsd: 1,
-
   reserveUsd: 1,
 
   calmTargetBps: 30,
@@ -45,11 +42,7 @@ const CONFIG = {
   stopLossBps: 45,
 
   maxSlippageBps: 30,
-
-  minNetEdgeBps: 12,
-
-  candidateMaxAgeMs:
-    30_000
+  minNetEdgeBps: 12
 };
 
 
@@ -131,7 +124,6 @@ function getWalletAddress() {
 
 // ======================================================
 // AUTH
-// POST ONLY
 // ======================================================
 
 function authorize(req) {
@@ -208,7 +200,9 @@ function getBaseUrl(req) {
 
   if (host) {
     const protocol =
-      host.includes("localhost")
+      host.includes(
+        "localhost"
+      )
         ? "http"
         : "https";
 
@@ -262,7 +256,9 @@ async function fetchJson(
 
 
 // ======================================================
-// SIGNAL
+// LOAD SIGNAL
+// IMPORTANT:
+// نرجع الرد كامل حتى نقرأ signal + market
 // ======================================================
 
 async function loadSignal(req) {
@@ -291,7 +287,9 @@ async function loadSignal(req) {
     );
   }
 
-  return data.signal;
+  // مهم:
+  // لا نرجع data.signal فقط
+  return data;
 }
 
 
@@ -313,47 +311,40 @@ async function executeTrade({
   const secret =
     process.env.AUTO_TRADER_SECRET;
 
-  const result =
-    await fetchJson(
-      `${baseUrl}/api/execution-agent`,
-      {
-        method: "POST",
+  return await fetchJson(
+    `${baseUrl}/api/execution-agent`,
+    {
+      method: "POST",
 
-        headers: {
-          "Content-Type":
-            "application/json",
+      headers: {
+        "Content-Type":
+          "application/json",
 
-          Authorization:
-            `Bearer ${secret}`
-        },
+        Authorization:
+          `Bearer ${secret}`
+      },
 
-        body:
-          JSON.stringify({
-            side,
+      body:
+        JSON.stringify({
+          side,
+          slotId,
+          amountUsd,
+          amountSol,
 
-            slotId,
-
-            amountUsd,
-
-            amountSol,
-
-            slippageBps:
-              clamp(
-                Math.floor(
-                  num(
-                    slippageBps,
-                    20
-                  )
-                ),
-                1,
-                CONFIG
-                  .maxSlippageBps
-              )
-          })
-      }
-    );
-
-  return result;
+          slippageBps:
+            clamp(
+              Math.floor(
+                num(
+                  slippageBps,
+                  20
+                )
+              ),
+              1,
+              CONFIG.maxSlippageBps
+            )
+        })
+    }
+  );
 }
 
 
@@ -374,14 +365,12 @@ function getDynamicTarget(
   let target =
     CONFIG.calmTargetBps;
 
-
   if (
     mode === "NORMAL"
   ) {
     target =
       CONFIG.normalTargetBps;
   }
-
 
   if (
     mode === "FAST"
@@ -390,13 +379,11 @@ function getDynamicTarget(
       CONFIG.fastTargetBps;
   }
 
-
   if (
     riskMode === "FAST"
   ) {
     target *= 1.10;
   }
-
 
   if (
     riskMode ===
@@ -404,7 +391,6 @@ function getDynamicTarget(
   ) {
     target *= 0.80;
   }
-
 
   return Math.round(
     clamp(
@@ -436,14 +422,12 @@ function calculateCapital(
       0
     );
 
-
   const free =
     Math.max(
       0,
       CONFIG.totalCapitalUsd -
       used
     );
-
 
   return {
     total:
@@ -470,7 +454,7 @@ function calculateCapital(
 
 
 // ======================================================
-// BUILD SELL CANDIDATES
+// SELL CANDIDATES
 // ======================================================
 
 function buildSellCandidates({
@@ -479,24 +463,20 @@ function buildSellCandidates({
 }) {
   const candidates = [];
 
-
   for (
     const position
     of positions
   ) {
-
     const entryPrice =
       num(
         position.entry_price
       );
-
 
     if (
       entryPrice <= 0
     ) {
       continue;
     }
-
 
     const pnlBps =
       toBps(
@@ -507,16 +487,13 @@ function buildSellCandidates({
         entryPrice
       );
 
-
     const targetBps =
       num(
         position.target_bps,
         CONFIG.normalTargetBps
       );
 
-
     let reason = null;
-
 
     if (
       pnlBps <=
@@ -526,7 +503,6 @@ function buildSellCandidates({
         "STOP_LOSS";
     }
 
-
     if (
       pnlBps >=
       targetBps
@@ -535,11 +511,9 @@ function buildSellCandidates({
         "PROFIT_TARGET";
     }
 
-
     if (!reason) {
       continue;
     }
-
 
     candidates.push({
       candidateId:
@@ -582,13 +556,12 @@ function buildSellCandidates({
     });
   }
 
-
   return candidates;
 }
 
 
 // ======================================================
-// BUILD BUY CANDIDATE
+// BUY CANDIDATE
 // ======================================================
 
 async function buildBuyCandidate({
@@ -598,7 +571,6 @@ async function buildBuyCandidate({
   signal,
   riskMode
 }) {
-
   if (
     String(
       signal.action ||
@@ -609,24 +581,20 @@ async function buildBuyCandidate({
     return null;
   }
 
-
   const freeSlot =
     await getFreeSlot(
       walletAddress,
       CONFIG.maxSlots
     );
 
-
   if (!freeSlot) {
     return null;
   }
-
 
   const capital =
     calculateCapital(
       positions
     );
-
 
   if (
     capital
@@ -636,13 +604,11 @@ async function buildBuyCandidate({
     return null;
   }
 
-
   const targetBps =
     getDynamicTarget(
       signal,
       riskMode
     );
-
 
   const estimatedSlippageBps =
     Math.max(
@@ -654,7 +620,6 @@ async function buildBuyCandidate({
         ) / 2
       )
     );
-
 
   const state = {
     totalCapitalUsd:
@@ -679,7 +644,6 @@ async function buildBuyCandidate({
       )
   };
 
-
   const candidate = {
     amountUsd:
       CONFIG.slotUsd,
@@ -690,10 +654,8 @@ async function buildBuyCandidate({
     estimatedSlippageBps,
 
     buyFeeBps: 0,
-
     sellFeeBps: 0
   };
-
 
   const risk =
     evaluateRisk({
@@ -712,7 +674,6 @@ async function buildBuyCandidate({
           CONFIG.minNetEdgeBps
       }
     });
-
 
   if (
     !risk.allowed
@@ -746,13 +707,13 @@ async function buildBuyCandidate({
     };
   }
 
-
   return {
     candidateId:
       crypto.randomUUID(),
 
     signalId:
-      signal.signalId,
+      signal.signalId ||
+      null,
 
     side:
       "BUY",
@@ -782,7 +743,8 @@ async function buildBuyCandidate({
 
     netEdgeBps:
       risk?.edge
-        ?.netEdgeBps ?? null,
+        ?.netEdgeBps ??
+      null,
 
     reason:
       signal.reason,
@@ -796,23 +758,29 @@ async function buildBuyCandidate({
 
 // ======================================================
 // ANALYZE SYSTEM
+// FIXED CURRENT PRICE
 // ======================================================
 
 async function analyzeSystem(req) {
-
   const walletAddress =
     getWalletAddress();
 
-
-  const signal =
+  // الآن هذا هو الرد الكامل من /api/signal
+  const signalData =
     await loadSignal(req);
 
+  const signal =
+    signalData?.signal ||
+    {};
 
+  // الإصلاح:
+  // ندعم السعر داخل signal أو market
   const currentPrice =
     num(
-      signal.currentPrice
+      signal?.currentPrice ||
+      signal?.price ||
+      signalData?.market?.price
     );
-
 
   if (
     currentPrice <= 0
@@ -822,13 +790,15 @@ async function analyzeSystem(req) {
     );
   }
 
+  // نخلي السعر متوفر دائمًا داخل signal
+  signal.currentPrice =
+    currentPrice;
 
   const [
     positions,
     recentTrades
   ] =
     await Promise.all([
-
       getOpenPositions(
         walletAddress
       ),
@@ -837,69 +807,49 @@ async function analyzeSystem(req) {
         walletAddress,
         20
       )
-
     ]);
-
 
   const riskMode =
     getDynamicRiskMode(
       recentTrades
     );
 
-
   const capital =
     calculateCapital(
       positions
     );
 
-
   const buyCandidate =
     await buildBuyCandidate({
       walletAddress,
-
       positions,
-
       recentTrades,
-
       signal,
-
       riskMode
     });
-
 
   const sellCandidates =
     buildSellCandidates({
       positions,
-
       currentPrice
     });
-
 
   const dashboard =
     await getTradingDashboard(
       walletAddress
     );
 
-
   return {
     walletAddress,
-
+    signalData,
     signal,
-
     currentPrice,
-
     positions,
-
     recentTrades,
-
     riskMode,
-
     capital,
-
     buyCandidate,
-
     sellCandidates,
-
     dashboard
   };
 }
@@ -914,10 +864,8 @@ async function executeApprovedBuy({
   analysis,
   requestedSlotId
 }) {
-
   const candidate =
     analysis.buyCandidate;
-
 
   if (
     !candidate ||
@@ -927,7 +875,6 @@ async function executeApprovedBuy({
       "NO_APPROVED_BUY_CANDIDATE"
     );
   }
-
 
   if (
     Number(
@@ -942,14 +889,11 @@ async function executeApprovedBuy({
     );
   }
 
-
-  // Re-check slot immediately
   const existing =
     await getOpenPositionBySlot(
       analysis.walletAddress,
       candidate.slotId
     );
-
 
   if (existing) {
     throw new Error(
@@ -957,16 +901,12 @@ async function executeApprovedBuy({
     );
   }
 
-
-  // ====================================================
-  // REAL JUPITER BUY
-  // ====================================================
-
   const execution =
     await executeTrade({
       req,
 
-      side: "BUY",
+      side:
+        "BUY",
 
       slotId:
         candidate.slotId,
@@ -979,9 +919,9 @@ async function executeApprovedBuy({
           .estimatedSlippageBps
     });
 
-
   if (
-    execution?.executed !== true
+    execution?.executed !==
+    true
   ) {
     return {
       executed: false,
@@ -994,7 +934,6 @@ async function executeApprovedBuy({
     };
   }
 
-
   const solReceived =
     atomicToAmount(
       execution
@@ -1004,7 +943,6 @@ async function executeApprovedBuy({
       SOL_DECIMALS
     );
 
-
   if (
     solReceived <= 0
   ) {
@@ -1013,15 +951,12 @@ async function executeApprovedBuy({
     );
   }
 
-
   const actualEntryPrice =
     CONFIG.slotUsd /
     solReceived;
 
-
   const targetBps =
     candidate.targetBps;
-
 
   const trailingDistanceBps =
     Math.max(
@@ -1032,7 +967,6 @@ async function executeApprovedBuy({
         0.30
       )
     );
-
 
   const saved =
     await openPosition({
@@ -1061,7 +995,6 @@ async function executeApprovedBuy({
 
       trailingDistanceBps
     });
-
 
   return {
     executed: true,
@@ -1097,23 +1030,20 @@ async function executeApprovedSell({
   analysis,
   requestedSlotId
 }) {
-
   const slotId =
     Number(
       requestedSlotId
     );
 
-
   const candidate =
-  analysis
-    .sellCandidates
-    .find(
-      (item) =>
-        Number(
-          item.slotId
-        ) === slotId
+    analysis
+      .sellCandidates
+      .find(
+        (item) =>
+          Number(
+            item.slotId
+          ) === slotId
       );
-
 
   if (!candidate) {
     throw new Error(
@@ -1121,17 +1051,11 @@ async function executeApprovedSell({
     );
   }
 
-
-  // ====================================================
-  // RE-CHECK POSITION
-  // ====================================================
-
   const position =
     await getOpenPositionBySlot(
       analysis.walletAddress,
       slotId
     );
-
 
   if (!position) {
     throw new Error(
@@ -1139,12 +1063,10 @@ async function executeApprovedSell({
     );
   }
 
-
   const amountSol =
     num(
       position.entry_sol
     );
-
 
   if (
     amountSol <= 0
@@ -1154,16 +1076,12 @@ async function executeApprovedSell({
     );
   }
 
-
-  // ====================================================
-  // REAL JUPITER SELL
-  // ====================================================
-
   const execution =
     await executeTrade({
       req,
 
-      side: "SELL",
+      side:
+        "SELL",
 
       slotId,
 
@@ -1173,14 +1091,15 @@ async function executeApprovedSell({
         CONFIG.maxSlippageBps
     });
 
-
   if (
-    execution?.executed !== true
+    execution?.executed !==
+    true
   ) {
     return {
       executed: false,
 
-      side: "SELL",
+      side:
+        "SELL",
 
       slotId,
 
@@ -1192,11 +1111,6 @@ async function executeApprovedSell({
     };
   }
 
-
-  // ====================================================
-  // ACTUAL USDC RECEIVED
-  // ====================================================
-
   const usdcReceived =
     atomicToAmount(
       execution
@@ -1206,7 +1120,6 @@ async function executeApprovedSell({
       USDC_DECIMALS
     );
 
-
   if (
     usdcReceived <= 0
   ) {
@@ -1214,11 +1127,6 @@ async function executeApprovedSell({
       "INVALID_USDC_RECEIVED"
     );
   }
-
-
-  // ====================================================
-  // SAVE REAL EXIT TO NEON
-  // ====================================================
 
   const closed =
     await closePosition({
@@ -1238,11 +1146,11 @@ async function executeApprovedSell({
         candidate.reason
     });
 
-
   return {
     executed: true,
 
-    side: "SELL",
+    side:
+      "SELL",
 
     slotId,
 
@@ -1278,332 +1186,4 @@ export default async function handler(
 ) {
 
   // ====================================================
-  // GET = ANALYSIS ONLY
-  // ====================================================
-
-  if (
-    req.method === "GET"
-  ) {
-    try {
-
-      const analysis =
-        await analyzeSystem(req);
-
-
-      return res
-        .status(200)
-        .json({
-          status: "ok",
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          liveMarket: true,
-
-          realTrading: true,
-
-          execution:
-            "APPROVAL_REQUIRED",
-
-          walletAddress:
-            analysis.walletAddress,
-
-          capital:
-            analysis.capital,
-
-          signal: {
-            signalId:
-              analysis
-                .signal
-                .signalId,
-
-            action:
-              analysis
-                .signal
-                .action,
-
-            confidence:
-              analysis
-                .signal
-                .confidence,
-
-            reason:
-              analysis
-                .signal
-                .reason,
-
-            currentPrice:
-              analysis.currentPrice,
-
-            marketMode:
-              analysis
-                .signal
-                .marketMode,
-
-            scalpingScore:
-              analysis
-                .signal
-                .scalpingScore,
-
-            spreadBps:
-              analysis
-                .signal
-                .spreadBps,
-
-            volatilityBps:
-              analysis
-                .signal
-                .volatilityBps,
-
-            direction:
-              analysis
-                .signal
-                .direction
-          },
-
-          riskMode:
-            analysis.riskMode,
-
-          buyCandidate:
-            analysis.buyCandidate,
-
-          sellCandidates:
-            analysis.sellCandidates,
-
-          dashboard:
-            analysis.dashboard,
-
-          timestamp:
-            new Date()
-              .toISOString()
-        });
-
-
-    } catch (error) {
-
-      console.error(
-        "Live Analysis Error:",
-        error
-      );
-
-
-      return res
-        .status(500)
-        .json({
-          status: "error",
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          message:
-            error?.message ||
-            "Live analysis failed",
-
-          timestamp:
-            new Date()
-              .toISOString()
-        });
-    }
-  }
-
-
-  // ====================================================
-  // POST = REAL EXECUTION
-  // ====================================================
-
-  if (
-    req.method === "POST"
-  ) {
-
-    const auth =
-      authorize(req);
-
-
-    if (!auth.ok) {
-      return res
-        .status(auth.status)
-        .json({
-          status: "error",
-
-          executed: false,
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          message:
-            auth.reason
-        });
-    }
-
-
-    try {
-
-      const {
-        side,
-        slotId
-      } =
-        req.body || {};
-
-
-      const requestedSide =
-        String(
-          side || ""
-        ).toUpperCase();
-
-
-      if (
-        requestedSide !== "BUY" &&
-        requestedSide !== "SELL"
-      ) {
-        return res
-          .status(400)
-          .json({
-            status: "error",
-
-            executed: false,
-
-            message:
-              "side must be BUY or SELL"
-          });
-      }
-
-
-      if (
-        !Number.isInteger(
-          Number(slotId)
-        ) ||
-        Number(slotId) < 1 ||
-        Number(slotId) >
-          CONFIG.maxSlots
-      ) {
-        return res
-          .status(400)
-          .json({
-            status: "error",
-
-            executed: false,
-
-            message:
-              "Invalid slotId"
-          });
-      }
-
-
-      // نعيد التحليل قبل التنفيذ مباشرة
-      const analysis =
-        await analyzeSystem(req);
-
-
-      let result;
-
-
-      if (
-        requestedSide === "BUY"
-      ) {
-        result =
-          await executeApprovedBuy({
-            req,
-
-            analysis,
-
-            requestedSlotId:
-              Number(slotId)
-          });
-      }
-
-
-      if (
-        requestedSide === "SELL"
-      ) {
-        result =
-          await executeApprovedSell({
-            req,
-
-            analysis,
-
-            requestedSlotId:
-              Number(slotId)
-          });
-      }
-
-
-      const dashboard =
-        await getTradingDashboard(
-          analysis.walletAddress
-        );
-
-
-      return res
-        .status(200)
-        .json({
-          status:
-            result?.executed
-              ? "ok"
-              : "blocked",
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          realTrading: true,
-
-          executed:
-            result?.executed === true,
-
-          result,
-
-          dashboard,
-
-          timestamp:
-            new Date()
-              .toISOString()
-        });
-
-
-    } catch (error) {
-
-      console.error(
-        "Live Execution Error:",
-        error
-      );
-
-
-      return res
-        .status(500)
-        .json({
-          status: "error",
-
-          engine:
-            "FAWAZ_LIVE_CANDIDATE_V1",
-
-          realTrading: true,
-
-          executed: false,
-
-          message:
-            error?.message ||
-            "Live execution failed",
-
-          timestamp:
-            new Date()
-              .toISOString()
-        });
-    }
-  }
-
-
-  // ====================================================
-  // OTHER METHODS
-  // ====================================================
-
-  return res
-    .status(405)
-    .json({
-      status: "error",
-
-      engine:
-        "FAWAZ_LIVE_CANDIDATE_V1",
-
-      message:
-        "GET or POST only"
-    });
-}
+  // GET = ANALYSIS
