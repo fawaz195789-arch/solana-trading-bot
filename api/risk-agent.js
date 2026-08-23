@@ -1,203 +1,216 @@
-const SOL_FLOOR = 0.1;
+// /api/risk-agent.js
+// FAWAZ AI BOT - Risk Agent v2
 
-const MAX_BUY_USDC = 5;
-const MAX_SELL_SOL = 1;
+const DEFAULTS = {
+  maxOpenSlots: 4,
+  maxCapitalUsage: 0.80,      // نستخدم 80% كحد أقصى
+  maxSlippageBps: 30,         // 0.30%
+  maxConsecutiveLosses: 3,
+  cooldownAfterLossMs: 60_000,
+  emergencyCooldownMs: 5 * 60_000,
+  minNetEdgeBps: 12,          // لازم يبقى هامش صافي بعد التكاليف
+  maxSingleSlotPct: 0.25,
+};
 
-const MAX_VOLATILITY = 1.5;
-const MAX_MOMENTUM = 3;
+export function analyzeRecentTrades(trades = []) {
+  const recent = trades.slice(-20);
 
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({
-      status: "error",
-      riskApproved: false,
-      message: "POST only"
-    });
+  if (!recent.length) {
+    return {
+      trades: 0,
+      wins: 0,
+      losses: 0,
+      winRate: 1,
+      avgWinBps: 0,
+      avgLossBps: 0,
+      consecutiveLosses: 0,
+    };
   }
 
-  try {
-    const {
-      decision,
-      confidence,
-      amount,
-      solBalance,
-      usdcBalance,
-      momentum = 0,
-      volatility = 0
-    } = req.body || {};
+  const wins = recent.filter((t) => Number(t.pnlBps) > 0);
+  const losses = recent.filter((t) => Number(t.pnlBps) <= 0);
 
-    const side = String(decision || "").toUpperCase();
+  let consecutiveLosses = 0;
 
-    const confidenceNumber = Number(confidence);
-    const amountNumber = Number(amount);
-    const sol = Number(solBalance);
-    const usdc = Number(usdcBalance);
-    const momentumNumber = Number(momentum);
-    const volatilityNumber = Number(volatility);
-
-    if (
-      side !== "BUY" &&
-      side !== "SELL"
-    ) {
-      return res.status(200).json({
-        status: "ok",
-        riskApproved: false,
-        riskDecision: "BLOCK",
-        reason: "No BUY or SELL decision"
-      });
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (Number(recent[i].pnlBps) <= 0) {
+      consecutiveLosses++;
+    } else {
+      break;
     }
-
-    if (
-      !Number.isFinite(confidenceNumber) ||
-      confidenceNumber < 70
-    ) {
-      return res.status(200).json({
-        status: "ok",
-        riskApproved: false,
-        riskDecision: "BLOCK",
-        reason: "Confidence below 70%"
-      });
-    }
-
-    if (
-      !Number.isFinite(amountNumber) ||
-      amountNumber <= 0
-    ) {
-      return res.status(200).json({
-        status: "ok",
-        riskApproved: false,
-        riskDecision: "BLOCK",
-        reason: "Invalid trade amount"
-      });
-    }
-
-    if (
-      !Number.isFinite(sol) ||
-      !Number.isFinite(usdc)
-    ) {
-      return res.status(200).json({
-        status: "ok",
-        riskApproved: false,
-        riskDecision: "BLOCK",
-        reason: "Invalid wallet balances"
-      });
-    }
-
-    if (
-      Number.isFinite(momentumNumber) &&
-      Math.abs(momentumNumber) > MAX_MOMENTUM
-    ) {
-      return res.status(200).json({
-        status: "ok",
-        riskApproved: false,
-        riskDecision: "BLOCK",
-        reason: "Momentum too extreme"
-      });
-    }
-
-    if (
-      Number.isFinite(volatilityNumber) &&
-      volatilityNumber > MAX_VOLATILITY
-    ) {
-      return res.status(200).json({
-        status: "ok",
-        riskApproved: false,
-        riskDecision: "BLOCK",
-        reason: "Market volatility too high"
-      });
-    }
-
-    // =========================
-    // BUY
-    // =========================
-
-    if (side === "BUY") {
-      if (amountNumber > MAX_BUY_USDC) {
-        return res.status(200).json({
-          status: "ok",
-          riskApproved: false,
-          riskDecision: "BLOCK",
-          reason:
-            `BUY amount exceeds ${MAX_BUY_USDC} USDC limit`
-        });
-      }
-
-      if (usdc < amountNumber) {
-        return res.status(200).json({
-          status: "ok",
-          riskApproved: false,
-          riskDecision: "BLOCK",
-          reason: "Not enough USDC"
-        });
-      }
-    }
-
-    // =========================
-    // SELL
-    // =========================
-
-    if (side === "SELL") {
-      if (amountNumber > MAX_SELL_SOL) {
-        return res.status(200).json({
-          status: "ok",
-          riskApproved: false,
-          riskDecision: "BLOCK",
-          reason:
-            `SELL amount exceeds ${MAX_SELL_SOL} SOL limit`
-        });
-      }
-
-      if (sol < amountNumber) {
-        return res.status(200).json({
-          status: "ok",
-          riskApproved: false,
-          riskDecision: "BLOCK",
-          reason: "Not enough SOL"
-        });
-      }
-
-      const remainingSol =
-        sol - amountNumber;
-
-      if (remainingSol < SOL_FLOOR) {
-        return res.status(200).json({
-          status: "ok",
-          riskApproved: false,
-          riskDecision: "BLOCK",
-          reason:
-            `SOL balance would fall below ${SOL_FLOOR}`
-        });
-      }
-    }
-
-    return res.status(200).json({
-      status: "ok",
-      riskApproved: true,
-      riskDecision: "ALLOW",
-      decision: side,
-      amount: amountNumber,
-      confidence: confidenceNumber,
-      balances: {
-        sol,
-        usdc
-      },
-      reason:
-        "Trade passed all risk checks"
-    });
-
-  } catch (error) {
-    console.error(
-      "Risk Agent Error:",
-      error
-    );
-
-    return res.status(500).json({
-      status: "error",
-      riskApproved: false,
-      riskDecision: "BLOCK",
-      message:
-        error?.message ||
-        "Risk Agent failed"
-    });
   }
+
+  const avgWinBps =
+    wins.length > 0
+      ? wins.reduce((sum, t) => sum + Number(t.pnlBps || 0), 0) /
+        wins.length
+      : 0;
+
+  const avgLossBps =
+    losses.length > 0
+      ? losses.reduce((sum, t) => sum + Number(t.pnlBps || 0), 0) /
+        losses.length
+      : 0;
+
+  return {
+    trades: recent.length,
+    wins: wins.length,
+    losses: losses.length,
+    winRate: wins.length / recent.length,
+    avgWinBps,
+    avgLossBps,
+    consecutiveLosses,
+  };
+}
+
+export function calculateNetEdge({
+  expectedMoveBps,
+  buyFeeBps = 0,
+  sellFeeBps = 0,
+  estimatedSlippageBps = 0,
+}) {
+  const totalCostBps =
+    Number(buyFeeBps) +
+    Number(sellFeeBps) +
+    Number(estimatedSlippageBps);
+
+  return {
+    expectedMoveBps,
+    totalCostBps,
+    netEdgeBps: Number(expectedMoveBps) - totalCostBps,
+  };
+}
+
+export function evaluateRisk({
+  state,
+  candidate,
+  config = {},
+}) {
+  const cfg = {
+    ...DEFAULTS,
+    ...config,
+  };
+
+  const now = Date.now();
+
+  const stats = analyzeRecentTrades(state?.recentTrades || []);
+
+  const openSlots = (state?.slots || []).filter(
+    (slot) => slot.status === "OPEN"
+  );
+
+  // إيقاف طارئ فقط، وليس منع البحث عن الفرص
+  if (
+    state?.cooldownUntil &&
+    now < Number(state.cooldownUntil)
+  ) {
+    return {
+      allowed: false,
+      reason: "COOLDOWN",
+      retryAfterMs: Number(state.cooldownUntil) - now,
+      stats,
+    };
+  }
+
+  if (stats.consecutiveLosses >= cfg.maxConsecutiveLosses) {
+    return {
+      allowed: false,
+      reason: "LOSS_STREAK",
+      cooldownMs: cfg.emergencyCooldownMs,
+      stats,
+    };
+  }
+
+  if (openSlots.length >= cfg.maxOpenSlots) {
+    return {
+      allowed: false,
+      reason: "NO_FREE_SLOT",
+      stats,
+    };
+  }
+
+  if (
+    Number(candidate.estimatedSlippageBps) >
+    cfg.maxSlippageBps
+  ) {
+    return {
+      allowed: false,
+      reason: "SLIPPAGE_TOO_HIGH",
+      stats,
+    };
+  }
+
+  const edge = calculateNetEdge(candidate);
+
+  if (edge.netEdgeBps < cfg.minNetEdgeBps) {
+    return {
+      allowed: false,
+      reason: "EDGE_TOO_SMALL",
+      edge,
+      stats,
+    };
+  }
+
+  const totalCapital = Number(state?.totalCapitalUsd || 0);
+
+  const currentlyUsed = openSlots.reduce(
+    (sum, slot) => sum + Number(slot.amountUsd || 0),
+    0
+  );
+
+  const maxAllowedCapital =
+    totalCapital * cfg.maxCapitalUsage;
+
+  if (
+    currentlyUsed + Number(candidate.amountUsd) >
+    maxAllowedCapital
+  ) {
+    return {
+      allowed: false,
+      reason: "CAPITAL_LIMIT",
+      stats,
+    };
+  }
+
+  if (
+    Number(candidate.amountUsd) >
+    totalCapital * cfg.maxSingleSlotPct
+  ) {
+    return {
+      allowed: false,
+      reason: "SLOT_TOO_LARGE",
+      stats,
+    };
+  }
+
+  return {
+    allowed: true,
+    reason: "APPROVED",
+    edge,
+    stats,
+  };
+}
+
+export function getDynamicRiskMode(trades = []) {
+  const stats = analyzeRecentTrades(trades);
+
+  if (stats.consecutiveLosses >= 3) {
+    return "PAUSED";
+  }
+
+  if (
+    stats.trades >= 8 &&
+    stats.winRate < 0.40
+  ) {
+    return "DEFENSIVE";
+  }
+
+  if (
+    stats.trades >= 8 &&
+    stats.winRate >= 0.65
+  ) {
+    return "FAST";
+  }
+
+  return "NORMAL";
 }
