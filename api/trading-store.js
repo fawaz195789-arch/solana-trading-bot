@@ -1,5 +1,10 @@
 import { neon } from "@neondatabase/serverless";
 
+
+// ======================================================
+// DATABASE
+// ======================================================
+
 function getDatabaseUrl() {
   const direct =
     process.env.DATABASE_URL ||
@@ -11,12 +16,21 @@ function getDatabaseUrl() {
     return direct;
   }
 
-  for (const value of Object.values(process.env)) {
+  for (
+    const value
+    of Object.values(
+      process.env
+    )
+  ) {
     if (
       typeof value === "string" &&
       (
-        value.startsWith("postgres://") ||
-        value.startsWith("postgresql://")
+        value.startsWith(
+          "postgres://"
+        ) ||
+        value.startsWith(
+          "postgresql://"
+        )
       )
     ) {
       return value;
@@ -28,9 +42,13 @@ function getDatabaseUrl() {
   );
 }
 
+
 function db() {
-  return neon(getDatabaseUrl());
+  return neon(
+    getDatabaseUrl()
+  );
 }
+
 
 // ======================================================
 // CREATE / UPGRADE TABLES
@@ -98,9 +116,6 @@ export async function ensureTradingTables() {
     )
   `;
 
-  // ====================================================
-  // UPGRADE OLD TABLE SAFELY
-  // ====================================================
 
   await sql`
     ALTER TABLE bot_positions
@@ -145,9 +160,6 @@ export async function ensureTradingTables() {
       close_reason TEXT
   `;
 
-  // ====================================================
-  // MIGRATE CURRENT OLD POSITION TO SLOT 1
-  // ====================================================
 
   await sql`
     UPDATE bot_positions
@@ -167,9 +179,6 @@ export async function ensureTradingTables() {
     WHERE trailing_active IS NULL
   `;
 
-  // ====================================================
-  // INDEXES
-  // ====================================================
 
   await sql`
     CREATE INDEX IF NOT EXISTS
@@ -199,8 +208,12 @@ export async function ensureTradingTables() {
   `;
 }
 
+
 // ======================================================
-// GET ALL OPEN POSITIONS
+// GET LIVE OPEN POSITIONS
+//
+// IMPORTANT:
+// PAPER positions are ignored completely.
 // ======================================================
 
 export async function getOpenPositions(
@@ -210,26 +223,37 @@ export async function getOpenPositions(
 
   const sql = db();
 
-  const rows = await sql`
-    SELECT *
-    FROM bot_positions
+  const rows =
+    await sql`
+      SELECT *
+      FROM bot_positions
 
-    WHERE wallet_address =
-      ${walletAddress}
+      WHERE wallet_address =
+        ${walletAddress}
 
-      AND status = 'OPEN'
+        AND status = 'OPEN'
 
-    ORDER BY
-      slot_id ASC,
-      opened_at ASC
-  `;
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
+
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
+
+      ORDER BY
+        slot_id ASC,
+        opened_at ASC
+    `;
 
   return rows || [];
 }
 
+
 // ======================================================
-// GET ONE OPEN POSITION
-// Kept for old dashboard compatibility
+// GET FIRST LIVE OPEN POSITION
 // ======================================================
 
 export async function getOpenPosition(
@@ -240,11 +264,15 @@ export async function getOpenPosition(
       walletAddress
     );
 
-  return positions[0] || null;
+  return (
+    positions[0] ||
+    null
+  );
 }
 
+
 // ======================================================
-// GET POSITION BY SLOT
+// GET LIVE POSITION BY SLOT
 // ======================================================
 
 export async function getOpenPositionBySlot(
@@ -255,28 +283,44 @@ export async function getOpenPositionBySlot(
 
   const sql = db();
 
-  const rows = await sql`
-    SELECT *
-    FROM bot_positions
+  const rows =
+    await sql`
+      SELECT *
+      FROM bot_positions
 
-    WHERE wallet_address =
-      ${walletAddress}
+      WHERE wallet_address =
+        ${walletAddress}
 
-      AND status = 'OPEN'
+        AND status = 'OPEN'
 
-      AND slot_id =
-      ${Number(slotId)}
+        AND slot_id =
+          ${Number(slotId)}
 
-    ORDER BY opened_at DESC
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
 
-    LIMIT 1
-  `;
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
 
-  return rows[0] || null;
+      ORDER BY
+        opened_at DESC
+
+      LIMIT 1
+    `;
+
+  return (
+    rows[0] ||
+    null
+  );
 }
 
+
 // ======================================================
-// FIND FREE SLOT
+// FIND FREE LIVE SLOT
 // ======================================================
 
 export async function getFreeSlot(
@@ -291,8 +335,10 @@ export async function getFreeSlot(
   const usedSlots =
     new Set(
       openPositions.map(
-        (position) =>
-          Number(position.slot_id)
+        position =>
+          Number(
+            position.slot_id
+          )
       )
     );
 
@@ -302,7 +348,9 @@ export async function getFreeSlot(
     slot++
   ) {
     if (
-      !usedSlots.has(slot)
+      !usedSlots.has(
+        slot
+      )
     ) {
       return slot;
     }
@@ -311,8 +359,9 @@ export async function getFreeSlot(
   return null;
 }
 
+
 // ======================================================
-// OPEN NEW POSITION
+// OPEN LIVE POSITION
 // ======================================================
 
 export async function openPosition({
@@ -322,7 +371,7 @@ export async function openPosition({
   entrySol,
   entryUsdc,
   signature,
-  strategy = "MICRO_SCALP",
+  strategy = "LIVE_MICRO_SCALP",
   targetBps = null,
   trailingDistanceBps = null
 }) {
@@ -333,8 +382,11 @@ export async function openPosition({
   const numericSlot =
     Number(slotId);
 
+
   if (
-    !Number.isInteger(numericSlot) ||
+    !Number.isInteger(
+      numericSlot
+    ) ||
     numericSlot < 1
   ) {
     throw new Error(
@@ -342,9 +394,6 @@ export async function openPosition({
     );
   }
 
-  // ====================================================
-  // ONLY BLOCK SAME SLOT
-  // ====================================================
 
   const existing =
     await getOpenPositionBySlot(
@@ -352,85 +401,89 @@ export async function openPosition({
       numericSlot
     );
 
+
   if (existing) {
     throw new Error(
-      `Slot ${numericSlot} already has an open position`
+      `Slot ${numericSlot} already has a LIVE open position`
     );
   }
 
-  const rows = await sql`
-    INSERT INTO bot_positions (
-      wallet_address,
-      symbol,
-      status,
 
-      slot_id,
-      strategy,
+  const rows =
+    await sql`
+      INSERT INTO bot_positions (
+        wallet_address,
+        symbol,
+        status,
 
-      entry_price,
-      entry_sol,
-      entry_usdc,
+        slot_id,
+        strategy,
 
-      highest_price,
+        entry_price,
+        entry_sol,
+        entry_usdc,
 
-      target_bps,
+        highest_price,
+        target_bps,
 
-      trailing_active,
+        trailing_active,
+        trailing_distance_bps,
 
-      trailing_distance_bps,
+        buy_signature,
+        opened_at
+      )
 
-      buy_signature,
+      VALUES (
+        ${walletAddress},
 
-      opened_at
-    )
-    VALUES (
-      ${walletAddress},
+        'SOL-USDC',
 
-      'SOL-USDC',
+        'OPEN',
 
-      'OPEN',
+        ${numericSlot},
 
-      ${numericSlot},
+        ${strategy},
 
-      ${strategy},
+        ${Number(entryPrice)},
 
-      ${Number(entryPrice)},
+        ${Number(entrySol)},
 
-      ${Number(entrySol)},
+        ${Number(entryUsdc)},
 
-      ${Number(entryUsdc)},
+        ${Number(entryPrice)},
 
-      ${Number(entryPrice)},
+        ${
+          targetBps !== null
+            ? Number(
+                targetBps
+              )
+            : null
+        },
 
-      ${
-        targetBps !== null
-          ? Number(targetBps)
-          : null
-      },
+        FALSE,
 
-      FALSE,
+        ${
+          trailingDistanceBps !== null
+            ? Number(
+                trailingDistanceBps
+              )
+            : null
+        },
 
-      ${
-        trailingDistanceBps !== null
-          ? Number(
-              trailingDistanceBps
-            )
-          : null
-      },
+        ${signature || null},
 
-      ${signature || null},
+        NOW()
+      )
 
-      NOW()
-    )
-
-    RETURNING *
-  `;
+      RETURNING *
+    `;
 
   return rows[0];
 }
 
+
 // ======================================================
-// UPDATE POSITION HIGH
+// UPDATE LIVE POSITION HIGH
 // ======================================================
 
 export async function updateHighestPrice({
@@ -441,29 +494,49 @@ export async function updateHighestPrice({
 
   const sql = db();
 
-  const rows = await sql`
-    UPDATE bot_positions
+  const rows =
+    await sql`
+      UPDATE bot_positions
 
-    SET highest_price =
-      GREATEST(
-        COALESCE(
-          highest_price,
-          entry_price
-        ),
-        ${Number(highestPrice)}
-      )
+      SET highest_price =
+        GREATEST(
+          COALESCE(
+            highest_price,
+            entry_price
+          ),
+          ${Number(
+            highestPrice
+          )}
+        )
 
-    WHERE id = ${Number(id)}
-      AND status = 'OPEN'
+      WHERE id =
+        ${Number(id)}
 
-    RETURNING *
-  `;
+        AND status =
+          'OPEN'
 
-  return rows[0] || null;
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
+
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
+
+      RETURNING *
+    `;
+
+  return (
+    rows[0] ||
+    null
+  );
 }
 
+
 // ======================================================
-// ENABLE TRAILING
+// ACTIVATE LIVE TRAILING
 // ======================================================
 
 export async function activateTrailing({
@@ -474,38 +547,64 @@ export async function activateTrailing({
 
   const sql = db();
 
-  const rows = await sql`
-    UPDATE bot_positions
+  const rows =
+    await sql`
+      UPDATE bot_positions
 
-    SET
-      trailing_active = TRUE,
+      SET
+        trailing_active = TRUE,
 
-      highest_price =
-        CASE
-          WHEN ${highestPrice}::double precision
-            IS NULL
-          THEN highest_price
+        highest_price =
+          CASE
 
-          ELSE GREATEST(
-            COALESCE(
-              highest_price,
-              entry_price
-            ),
-            ${highestPrice}::double precision
-          )
-        END
+            WHEN ${
+              highestPrice
+            }::double precision
+              IS NULL
 
-    WHERE id = ${Number(id)}
-      AND status = 'OPEN'
+            THEN highest_price
 
-    RETURNING *
-  `;
+            ELSE GREATEST(
+              COALESCE(
+                highest_price,
+                entry_price
+              ),
 
-  return rows[0] || null;
+              ${
+                highestPrice
+              }::double precision
+            )
+
+          END
+
+      WHERE id =
+        ${Number(id)}
+
+        AND status =
+          'OPEN'
+
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
+
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
+
+      RETURNING *
+    `;
+
+  return (
+    rows[0] ||
+    null
+  );
 }
 
+
 // ======================================================
-// CLOSE POSITION
+// CLOSE LIVE POSITION
 // ======================================================
 
 export async function closePosition({
@@ -519,32 +618,54 @@ export async function closePosition({
 
   const sql = db();
 
-  const rows = await sql`
-    SELECT *
-    FROM bot_positions
 
-    WHERE id = ${Number(id)}
-      AND status = 'OPEN'
+  const rows =
+    await sql`
+      SELECT *
+      FROM bot_positions
 
-    LIMIT 1
-  `;
+      WHERE id =
+        ${Number(id)}
+
+        AND status =
+          'OPEN'
+
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
+
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
+
+      LIMIT 1
+    `;
+
 
   const position =
     rows[0];
 
+
   if (!position) {
     throw new Error(
-      "Open position not found"
+      "LIVE open position not found"
     );
   }
+
 
   const entryUsdc =
     Number(
       position.entry_usdc
     );
 
+
   const receivedUsdc =
-    Number(exitUsdc);
+    Number(
+      exitUsdc
+    );
+
 
   if (
     !Number.isFinite(
@@ -557,9 +678,11 @@ export async function closePosition({
     );
   }
 
+
   const pnl =
     receivedUsdc -
     entryUsdc;
+
 
   const pnlPct =
     entryUsdc > 0
@@ -569,15 +692,19 @@ export async function closePosition({
         ) * 100
       : 0;
 
+
   const updated =
     await sql`
       UPDATE bot_positions
 
       SET
-        status = 'CLOSED',
+        status =
+          'CLOSED',
 
         exit_price =
-          ${Number(exitPrice)},
+          ${Number(
+            exitPrice
+          )},
 
         exit_usdc =
           ${receivedUsdc},
@@ -594,7 +721,8 @@ export async function closePosition({
         realized_pnl_pct =
           ${pnlPct},
 
-        closed_at = NOW()
+        closed_at =
+          NOW()
 
       WHERE id =
         ${Number(id)}
@@ -602,12 +730,13 @@ export async function closePosition({
       RETURNING *
     `;
 
+
   return updated[0];
 }
 
+
 // ======================================================
-// RECENT CLOSED TRADES
-// Used by Risk Agent
+// RECENT LIVE CLOSED TRADES
 // ======================================================
 
 export async function getRecentClosedTrades(
@@ -618,44 +747,63 @@ export async function getRecentClosedTrades(
 
   const sql = db();
 
+
   const safeLimit =
     Math.max(
       1,
       Math.min(
         100,
-        Number(limit) || 20
+        Number(limit) ||
+        20
       )
     );
 
-  const rows = await sql`
-    SELECT *
-    FROM bot_positions
 
-    WHERE wallet_address =
-      ${walletAddress}
+  const rows =
+    await sql`
+      SELECT *
+      FROM bot_positions
 
-      AND status = 'CLOSED'
+      WHERE wallet_address =
+        ${walletAddress}
 
-    ORDER BY closed_at DESC
+        AND status =
+          'CLOSED'
 
-    LIMIT ${safeLimit}
-  `;
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
+
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
+
+      ORDER BY
+        closed_at DESC
+
+      LIMIT ${safeLimit}
+    `;
+
 
   return rows.map(
-    (trade) => ({
+    trade => ({
       ...trade,
 
       pnlBps:
         Number(
-          trade.realized_pnl_pct ||
+          trade
+            .realized_pnl_pct ||
           0
         ) * 100
     })
   );
 }
 
+
 // ======================================================
-// LAST 24 HOURS STATS
+// LIVE LAST 24 HOURS
 // ======================================================
 
 export async function get24HourStats(
@@ -665,49 +813,73 @@ export async function get24HourStats(
 
   const sql = db();
 
-  const rows = await sql`
-    SELECT
-      COUNT(*)::int
-        AS trades,
 
-      COUNT(*) FILTER (
-        WHERE realized_pnl > 0
-      )::int AS wins,
+  const rows =
+    await sql`
+      SELECT
 
-      COUNT(*) FILTER (
-        WHERE realized_pnl <= 0
-      )::int AS losses,
+        COUNT(*)::int
+          AS trades,
 
-      COALESCE(
-        SUM(realized_pnl),
-        0
-      )::double precision
-        AS pnl
+        COUNT(*) FILTER (
+          WHERE realized_pnl > 0
+        )::int
+          AS wins,
 
-    FROM bot_positions
+        COUNT(*) FILTER (
+          WHERE realized_pnl <= 0
+        )::int
+          AS losses,
 
-    WHERE wallet_address =
-      ${walletAddress}
+        COALESCE(
+          SUM(
+            realized_pnl
+          ),
+          0
+        )::double precision
+          AS pnl
 
-      AND status = 'CLOSED'
+      FROM bot_positions
 
-      AND closed_at >=
-        NOW() -
-        INTERVAL '24 hours'
-  `;
+      WHERE wallet_address =
+        ${walletAddress}
+
+        AND status =
+          'CLOSED'
+
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
+
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
+
+        AND closed_at >=
+          NOW() -
+          INTERVAL '24 hours'
+    `;
+
 
   const stats =
     rows[0];
 
+
   const trades =
     Number(
-      stats.trades || 0
+      stats.trades ||
+      0
     );
+
 
   const wins =
     Number(
-      stats.wins || 0
+      stats.wins ||
+      0
     );
+
 
   return {
     trades,
@@ -716,12 +888,14 @@ export async function get24HourStats(
 
     losses:
       Number(
-        stats.losses || 0
+        stats.losses ||
+        0
       ),
 
     pnl:
       Number(
-        stats.pnl || 0
+        stats.pnl ||
+        0
       ),
 
     winRate:
@@ -734,8 +908,9 @@ export async function get24HourStats(
   };
 }
 
+
 // ======================================================
-// ALL TIME STATS
+// LIVE ALL TIME STATS
 // ======================================================
 
 export async function getAllTimeStats(
@@ -745,45 +920,69 @@ export async function getAllTimeStats(
 
   const sql = db();
 
-  const rows = await sql`
-    SELECT
-      COUNT(*)::int
-        AS trades,
 
-      COUNT(*) FILTER (
-        WHERE realized_pnl > 0
-      )::int AS wins,
+  const rows =
+    await sql`
+      SELECT
 
-      COUNT(*) FILTER (
-        WHERE realized_pnl <= 0
-      )::int AS losses,
+        COUNT(*)::int
+          AS trades,
 
-      COALESCE(
-        SUM(realized_pnl),
-        0
-      )::double precision
-        AS pnl
+        COUNT(*) FILTER (
+          WHERE realized_pnl > 0
+        )::int
+          AS wins,
 
-    FROM bot_positions
+        COUNT(*) FILTER (
+          WHERE realized_pnl <= 0
+        )::int
+          AS losses,
 
-    WHERE wallet_address =
-      ${walletAddress}
+        COALESCE(
+          SUM(
+            realized_pnl
+          ),
+          0
+        )::double precision
+          AS pnl
 
-      AND status = 'CLOSED'
-  `;
+      FROM bot_positions
+
+      WHERE wallet_address =
+        ${walletAddress}
+
+        AND status =
+          'CLOSED'
+
+        AND (
+          strategy IS NULL
+          OR strategy NOT LIKE 'PAPER%'
+        )
+
+        AND (
+          buy_signature IS NULL
+          OR buy_signature <> 'PAPER_BUY'
+        )
+    `;
+
 
   const stats =
     rows[0];
 
+
   const trades =
     Number(
-      stats.trades || 0
+      stats.trades ||
+      0
     );
+
 
   const wins =
     Number(
-      stats.wins || 0
+      stats.wins ||
+      0
     );
+
 
   return {
     trades,
@@ -792,12 +991,14 @@ export async function getAllTimeStats(
 
     losses:
       Number(
-        stats.losses || 0
+        stats.losses ||
+        0
       ),
 
     pnl:
       Number(
-        stats.pnl || 0
+        stats.pnl ||
+        0
       ),
 
     winRate:
@@ -810,8 +1011,9 @@ export async function getAllTimeStats(
   };
 }
 
+
 // ======================================================
-// DASHBOARD DATA
+// LIVE DASHBOARD
 // ======================================================
 
 export async function getTradingDashboard(
@@ -821,26 +1023,30 @@ export async function getTradingDashboard(
     positions,
     day,
     total
-  ] = await Promise.all([
-    getOpenPositions(
-      walletAddress
-    ),
+  ] =
+    await Promise.all([
 
-    get24HourStats(
-      walletAddress
-    ),
+      getOpenPositions(
+        walletAddress
+      ),
 
-    getAllTimeStats(
-      walletAddress
-    )
-  ]);
+      get24HourStats(
+        walletAddress
+      ),
+
+      getAllTimeStats(
+        walletAddress
+      )
+
+    ]);
+
 
   return {
-    // القديم يستمر بالعمل
-    openPosition:
-      positions[0] || null,
 
-    // الجديد يعرض كل Slots
+    openPosition:
+      positions[0] ||
+      null,
+
     openPositions:
       positions,
 
