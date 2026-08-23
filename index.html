@@ -4,22 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>FAWAZ AI BOT</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #<!doctype html>
-<html lang="ar" dir="rtl">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>FAWAZ AI BOT</title>
-
-  <script src="https://plugin.jup.ag/plugin-v1.js" data-preload defer></script>
+  <script src="https://unpkg.com/@solana/web3.js@1.98.4/lib/index.iife.min.js"></script>
 
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #fff; color: #111; }
-    .card { max-width: 520px; }
-    button { margin-left: 8px; padding: 8px 12px; cursor: pointer; }
+    .card { max-width: 560px; }
+    button { margin: 6px; padding: 10px 14px; cursor: pointer; }
     .status { margin-top: 14px; font-weight: 700; }
-    #jupiter-plugin { height: 620px; margin-top: 18px; }
+    .quote { margin-top: 14px; padding: 12px; background: #f3f4f6; border-radius: 8px; }
   </style>
 </head>
 
@@ -42,13 +34,24 @@
     <hr />
 
     <h3>اختبار صفقة حقيقية محدود</h3>
-    <p>0.01 SOL إلى USDC فقط — راجع التفاصيل داخل Jupiter قبل الموافقة.</p>
+    <p>0.01 SOL إلى USDC فقط. لا يتم التنفيذ إلا بعد موافقتك في OKX.</p>
 
-    <div id="jupiter-plugin"></div>
+    <button id="quoteButton" type="button" disabled>عرض سعر 0.01 SOL</button>
+    <button id="executeButton" type="button" disabled>تأكيد وإرسال الصفقة</button>
+
+    <div class="quote" id="quoteDetails">
+      اطلب السعر أولًا.
+    </div>
   </div>
 
   <script>
+    const SOL_MINT = "So11111111111111111111111111111111111111112";
+    const USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    const AMOUNT_LAMPORTS = "10000000";
+
     let connectedAddress = "";
+    let pendingOrder = null;
+    let orderCreatedAt = 0;
 
     function getOKXProvider() {
       return window.okxwallet && window.okxwallet.solana
@@ -56,10 +59,26 @@
         : null;
     }
 
+    function base64ToBytes(value) {
+      const binary = atob(value);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes;
+    }
+
+    function bytesToBase64(bytes) {
+      let binary = "";
+      bytes.forEach(function (byte) {
+        binary += String.fromCharCode(byte);
+      });
+      return btoa(binary);
+    }
+
     async function connectOKXWallet() {
       const status = document.getElementById("dexStatus");
       const wallet = document.getElementById("walletAddress");
-      const testButton = document.getElementById("testButton");
       const provider = getOKXProvider();
 
       if (!provider) {
@@ -84,7 +103,8 @@
           connectedAddress.slice(0, 6) + "..." + connectedAddress.slice(-4);
 
         status.textContent = "✅ تم ربط محفظة OKX بنجاح";
-        testButton.disabled = false;
+        document.getElementById("testButton").disabled = false;
+        document.getElementById("quoteButton").disabled = false;
       } catch (error) {
         status.textContent = "❌ لم يكتمل الربط: " + (error.message || "تم الإلغاء");
       }
@@ -97,34 +117,129 @@
           : "اربط المحفظة أولًا.";
     }
 
+    async function requestQuote() {
+      const status = document.getElementById("dexStatus");
+      const details = document.getElementById("quoteDetails");
+
+      if (!connectedAddress) {
+        status.textContent = "اربط المحفظة أولًا.";
+        return;
+      }
+
+      try {
+        status.textContent = "جارٍ طلب سعر 0.01 SOL...";
+        details.textContent = "جارٍ جلب أفضل سعر من Jupiter...";
+
+        const params = new URLSearchParams({
+          inputMint: SOL_MINT,
+          outputMint: USDC_MINT,
+          amount: AMOUNT_LAMPORTS,
+          taker: connectedAddress
+        });
+
+        const response = await fetch(
+          "https://api.jup.ag/swap/v2/order?" + params.toString()
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || !data.transaction || !data.requestId) {
+          throw new Error(data.errorMessage || "لم يصل عرض صالح");
+        }
+
+        pendingOrder = data;
+        orderCreatedAt = Date.now();
+
+        const expectedUSDC = Number(data.outAmount || 0) / 1000000;
+
+        details.textContent =
+          "سيتم إرسال 0.01 SOL. المتوقع استلامه تقريبًا: " +
+          expectedUSDC.toFixed(6) +
+          " USDC. العرض صالح لفترة قصيرة فقط.";
+
+        status.textContent =
+          "✅ السعر جاهز. راجعه ثم اضغط تأكيد وإرسال الصفقة.";
+        document.getElementById("executeButton").disabled = false;
+      } catch (error) {
+        pendingOrder = null;
+        document.getElementById("executeButton").disabled = true;
+        status.textContent =
+          "❌ تعذر جلب السعر: " + (error.message || "حاول مرة أخرى");
+        details.textContent = "لم يتم تنفيذ أي شيء.";
+      }
+    }
+
+    async function executeSwap() {
+      const status = document.getElementById("dexStatus");
+      const details = document.getElementById("quoteDetails");
+      const provider = getOKXProvider();
+
+      if (!pendingOrder || !provider) {
+        status.textContent = "اطلب سعرًا جديدًا أولًا.";
+        return;
+      }
+
+      if (Date.now() - orderCreatedAt > 50000) {
+        pendingOrder = null;
+        document.getElementById("executeButton").disabled = true;
+        status.textContent = "انتهت صلاحية العرض. اضغط عرض السعر مرة أخرى.";
+        return;
+      }
+
+      try {
+        status.textContent = "ستظهر الآن موافقة OKX. راجع 0.01 SOL → USDC فقط.";
+
+        const transaction =
+          solanaWeb3.VersionedTransaction.deserialize(
+            base64ToBytes(pendingOrder.transaction)
+          );
+
+        const signedTransaction = await provider.signTransaction(transaction);
+
+        status.textContent = "جارٍ إرسال العملية إلى Jupiter...";
+
+        const response = await fetch(
+          "https://api.jup.ag/swap/v2/execute",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              signedTransaction: bytesToBase64(signedTransaction.serialize()),
+              requestId: pendingOrder.requestId
+            })
+          }
+        );
+
+        const result = await response.json();
+
+        if (!response.ok || result.status !== "Success") {
+          throw new Error(result.error || "لم تكتمل العملية");
+        }
+
+        status.textContent = "✅ تمت الصفقة بنجاح";
+        details.textContent =
+          "تم تحويل 0.01 SOL إلى USDC. رقم العملية: " + result.signature;
+
+        pendingOrder = null;
+        document.getElementById("executeButton").disabled = true;
+      } catch (error) {
+        status.textContent =
+          "❌ لم تُنفذ الصفقة أو تم إلغاؤها: " +
+          (error.message || "حاول من جديد");
+      }
+    }
+
     document.getElementById("connectButton")
       .addEventListener("click", connectOKXWallet);
 
     document.getElementById("testButton")
       .addEventListener("click", testConnection);
 
-    window.addEventListener("load", function () {
-      window.Jupiter.init({
-        displayMode: "integrated",
-        integratedTargetId: "jupiter-plugin",
-        formProps: {
-          initialInputMint: "So11111111111111111111111111111111111111112",
-          initialOutputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-          initialAmount: "0.01",
-          fixedMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-          fixedAmount: true,
-          swapMode: "ExactIn"
-        },
-        onSuccess: function ({ txid }) {
-          document.getElementById("dexStatus").textContent =
-            "✅ تمت الصفقة بنجاح: " + txid;
-        },
-        onSwapError: function () {
-          document.getElementById("dexStatus").textContent =
-            "❌ لم تُنفذ الصفقة أو تم إلغاؤها.";
-        }
-      });
-    });
+    document.getElementById("quoteButton")
+      .addEventListener("click", requestQuote);
+
+    document.getElementById("executeButton")
+      .addEventListener("click", executeSwap);
   </script>
 </body>
 </html>
