@@ -1,121 +1,128 @@
 // /api/trade-orchestrator.js
 // FAWAZ AI BOT
-// Parallel Micro Scalper v2
+// Parallel Micro Scalper Orchestrator v4
+//
+// Features:
+// - Neon is the source of truth
+// - Up to 4 independent open positions
+// - Uses actual Jupiter BUY/Sell amounts
+// - Dynamic profit targets
+// - Trailing profit
+// - Stop loss
+// - Fast volatility / spread market scanner
+// - Performance-aware risk mode
+// - Can open multiple slots in the same cycle
+// - Compatible with existing legacy open position
 
 import {
   evaluateRisk,
-  getDynamicRiskMode,
+  getDynamicRiskMode
 } from "./risk-agent.js";
 
-const SOL_MINT =
-  "So11111111111111111111111111111111111111112";
-
-const USDC_MINT =
-  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+import {
+  getOpenPositions,
+  getFreeSlot,
+  openPosition,
+  closePosition,
+  updateHighestPrice,
+  activateTrailing,
+  getRecentClosedTrades,
+  getTradingDashboard
+} from "./trading-store.js";
 
 // ======================================================
-// CONFIG
+// CONSTANTS
 // ======================================================
+
+const SOL_DECIMALS = 9;
+const USDC_DECIMALS = 6;
 
 const CONFIG = {
   maxSlots: 4,
 
-  // نخلي 20% من رأس المال احتياطي
+  // إذا لم تضع SCALPER_SLOT_USD
+  // سيستخدم 5 USDC لكل Slot.
+  defaultSlotUsd: 5,
+
   reservePct: 0.20,
 
-  // أهداف الربح المتغيرة بالنقاط
+  // أهداف الربح
   calmTargetBps: 30,    // 0.30%
   normalTargetBps: 45,  // 0.45%
   fastTargetBps: 70,    // 0.70%
 
-  // Trailing Profit
+  // Trailing
   trailingActivationPct: 0.65,
   trailingDistancePct: 0.30,
 
   // وقف الخسارة
-  stopLossBps: 45, // 0.45%
+  stopLossBps: 45,
 
   // أقصى انزلاق
-  maxSlippageBps: 30, // 0.30%
+  maxSlippageBps: 30,
 
-  // الحد الأدنى للربح المتوقع بعد التكاليف
+  // أقل Edge متوقع
   minNetEdgeBps: 12,
 
-  // تأخير بسيط قبل إعادة استخدام نفس Slot
-  slotReentryDelayMs: 20_000,
+  // لا ندخل إذا Spread السوق مبالغ فيه
+  maxMarketSpreadBps: 20,
+
+  // عدد Slots التي يمكن فتحها في دورة واحدة
+  maxNewSlotsPerCycle: 4
 };
-
-// ======================================================
-// STATE
-// ======================================================
-
-const globalState =
-  globalThis.__FAWAZ_SCALPER_STATE__ || {
-    totalCapitalUsd: 0,
-
-    slots: Array.from(
-      { length: CONFIG.maxSlots },
-      (_, index) => ({
-        id: index + 1,
-        status: "READY",
-
-        entryPrice: null,
-        highestPrice: null,
-
-        amountUsd: 0,
-        quantity: 0,
-
-        targetBps: 0,
-
-        trailingActive: false,
-        trailingDistanceBps: 0,
-
-        openedAt: null,
-        closedAt: null,
-
-        lastUsedAt: 0,
-      })
-    ),
-
-    recentTrades: [],
-
-    prices: [],
-
-    cooldownUntil: 0,
-
-    stats: {
-      scanned: 0,
-      entries: 0,
-      exits: 0,
-      skipped: 0,
-    },
-  };
-
-globalThis.__FAWAZ_SCALPER_STATE__ = globalState;
 
 // ======================================================
 // HELPERS
 // ======================================================
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
+function number(value, fallback = 0) {
+  const n = Number(value);
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
 }
 
-function percentageToBps(value) {
+function clamp(value, min, max) {
+  return Math.max(
+    min,
+    Math.min(max, value)
+  );
+}
+
+function toBps(value) {
   return value * 10000;
+}
+
+function atomicToAmount(
+  atomic,
+  decimals
+) {
+  const n = number(atomic);
+
+  return (
+    n /
+    Math.pow(
+      10,
+      decimals
+    )
+  );
 }
 
 // ======================================================
 // AUTH
 // ======================================================
 
-function getAuthorization(req) {
-  const expected = process.env.AUTO_TRADER_SECRET;
+function authorize(req) {
+  const expected =
+    process.env.AUTO_TRADER_SECRET;
 
   if (!expected) {
     return {
       ok: false,
-      reason: "AUTO_TRADER_SECRET_MISSING",
+      status: 500,
+      reason:
+        "AUTO_TRADER_SECRET_MISSING"
     };
   }
 
@@ -123,664 +130,938 @@ function getAuthorization(req) {
     req.headers.authorization ||
     req.headers.Authorization;
 
-  if (header !== `Bearer ${expected}`) {
+  if (
+    header !==
+    `Bearer ${expected}`
+  ) {
     return {
       ok: false,
-      reason: "UNAUTHORIZED",
+      status: 401,
+      reason: "UNAUTHORIZED"
     };
   }
 
   return {
-    ok: true,
+    ok: true
   };
 }
 
 // ======================================================
-// MARKET PRICE
+// WALLET ADDRESS
 // ======================================================
 
-async function getMarketPrice(req) {
-  /*
-    الخيار الأول:
-    إذا عندك API خاص بالسعر نحطه في:
+function getWalletAddress() {
+  const wallet =
+    process.env.BOT_WALLET_ADDRESS ||
+    process.env.SOLANA_WALLET_ADDRESS ||
+    process.env.WALLET_ADDRESS;
 
-    MARKET_PRICE_ENDPOINT
-  */
+  if (!wallet) {
+    throw new Error(
+      "BOT_WALLET_ADDRESS is missing"
+    );
+  }
 
-  if (process.env.MARKET_PRICE_ENDPOINT) {
-    const response = await fetch(
-      process.env.MARKET_PRICE_ENDPOINT,
-      {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      }
+  return wallet.trim();
+}
+
+// ======================================================
+// BASE URL
+// ======================================================
+
+function getBaseUrl(req) {
+  if (
+    process.env.APP_BASE_URL
+  ) {
+    return process.env
+      .APP_BASE_URL
+      .replace(/\/$/, "");
+  }
+
+  if (
+    process.env
+      .VERCEL_PROJECT_PRODUCTION_URL
+  ) {
+    return (
+      "https://" +
+      process.env
+        .VERCEL_PROJECT_PRODUCTION_URL
+    );
+  }
+
+  if (
+    process.env.VERCEL_URL
+  ) {
+    return (
+      "https://" +
+      process.env.VERCEL_URL
+    );
+  }
+
+  const host =
+    req.headers.host;
+
+  if (!host) {
+    throw new Error(
+      "Unable to determine application URL"
+    );
+  }
+
+  return `https://${host}`;
+}
+
+// ======================================================
+// INTERNAL API REQUEST
+// ======================================================
+
+async function fetchJson(
+  url,
+  options = {}
+) {
+  const response =
+    await fetch(
+      url,
+      options
     );
 
-    if (!response.ok) {
-      throw new Error(
-        `MARKET_PRICE_HTTP_${response.status}`
-      );
-    }
-
-    const data = await response.json();
-
-    const price =
-      Number(data.price) ||
-      Number(data.solPrice) ||
-      Number(data.data?.price);
-
-    if (!price || price <= 0) {
-      throw new Error("INVALID_MARKET_PRICE");
-    }
-
-    return price;
-  }
-
-  /*
-    للاختبار فقط:
-
-    /api/trade-orchestrator?price=200
-  */
-
-  const queryPrice = Number(req.query?.price);
-
-  if (queryPrice > 0) {
-    return queryPrice;
-  }
-
-  throw new Error(
-    "MARKET_PRICE_ENDPOINT_NOT_CONFIGURED"
-  );
-}
-
-// ======================================================
-// PRICE MEMORY
-// ======================================================
-
-function pushPrice(price) {
-  globalState.prices.push({
-    price,
-    time: Date.now(),
-  });
-
-  if (globalState.prices.length > 60) {
-    globalState.prices =
-      globalState.prices.slice(-60);
-  }
-}
-
-// ======================================================
-// MARKET METRICS
-// ======================================================
-
-function calculateMarketMetrics() {
-  const prices =
-    globalState.prices.map((item) => item.price);
-
-  if (prices.length < 2) {
-    return {
-      momentumBps: 0,
-      volatilityBps: 0,
-      shortMoveBps: 0,
-      direction: "FLAT",
-    };
-  }
-
-  const current =
-    prices[prices.length - 1];
-
-  const previous =
-    prices[prices.length - 2];
-
-  const lookback =
-    prices[Math.max(0, prices.length - 6)];
-
-  const shortMoveBps =
-    percentageToBps(
-      (current - previous) / previous
-    );
-
-  const momentumBps =
-    percentageToBps(
-      (current - lookback) / lookback
-    );
-
-  const returns = [];
-
-  for (let i = 1; i < prices.length; i++) {
-    const move =
-      percentageToBps(
-        (prices[i] - prices[i - 1]) /
-          prices[i - 1]
-      );
-
-    returns.push(Math.abs(move));
-  }
-
-  const volatilityBps =
-    returns.length > 0
-      ? returns.reduce(
-          (sum, move) => sum + move,
-          0
-        ) / returns.length
-      : 0;
-
-  let direction = "FLAT";
-
-  if (momentumBps > 5) {
-    direction = "UP";
-  }
-
-  if (momentumBps < -5) {
-    direction = "DOWN";
-  }
-
-  return {
-    momentumBps,
-    volatilityBps,
-    shortMoveBps,
-    direction,
-  };
-}
-
-// ======================================================
-// DYNAMIC TARGET
-// ======================================================
-
-function getDynamicTarget(metrics, mode) {
-  let target = CONFIG.calmTargetBps;
-
-  if (metrics.volatilityBps >= 25) {
-    target = CONFIG.normalTargetBps;
-  }
-
-  if (metrics.volatilityBps >= 50) {
-    target = CONFIG.fastTargetBps;
-  }
-
-  if (mode === "FAST") {
-    target *= 1.10;
-  }
-
-  if (mode === "DEFENSIVE") {
-    target *= 0.80;
-  }
-
-  return Math.round(
-    clamp(target, 20, 100)
-  );
-}
-
-// ======================================================
-// SLOTS
-// ======================================================
-
-function getReadySlot() {
-  const now = Date.now();
-
-  return globalState.slots.find(
-    (slot) =>
-      slot.status === "READY" &&
-      now - Number(slot.lastUsedAt || 0) >=
-        CONFIG.slotReentryDelayMs
-  );
-}
-
-function getOpenSlots() {
-  return globalState.slots.filter(
-    (slot) => slot.status === "OPEN"
-  );
-}
-
-function calculateSlotAmount() {
-  const usableCapital =
-    globalState.totalCapitalUsd *
-    (1 - CONFIG.reservePct);
-
-  return usableCapital / CONFIG.maxSlots;
-}
-
-// ======================================================
-// ENTRY DETECTOR
-// ======================================================
-
-function detectEntryOpportunity({
-  price,
-  metrics,
-  mode,
-}) {
-  /*
-    طريقتين للدخول:
-
-    1) Momentum Scalping
-    السعر بدأ يتحرك للأعلى
-
-    2) Dip Layer
-    هبوط صغير نحاول نصيد ارتداده
-  */
-
-  const momentumEntry =
-    metrics.shortMoveBps >= 4 &&
-    metrics.momentumBps >= 3;
-
-  const dipEntry =
-    metrics.shortMoveBps <= -8 &&
-    Math.abs(metrics.shortMoveBps) <= 80;
-
-  const volatilityOk =
-    metrics.volatilityBps >= 3;
-
-  if (!volatilityOk) {
-    return {
-      enter: false,
-      reason: "VOLATILITY_TOO_LOW",
-    };
-  }
-
-  if (!momentumEntry && !dipEntry) {
-    return {
-      enter: false,
-      reason: "NO_MICRO_SETUP",
-    };
-  }
-
-  return {
-    enter: true,
-
-    type:
-      dipEntry
-        ? "DIP_LAYER"
-        : "MOMENTUM_SCALP",
-
-    estimatedMoveBps:
-      getDynamicTarget(metrics, mode),
-
-    price,
-  };
-}
-
-// ======================================================
-// EXECUTION
-// ======================================================
-
-async function executeTrade({
-  side,
-  amountUsd,
-  slotId,
-  maxSlippageBps,
-}) {
-  /*
-    هذا يرسل أمر التنفيذ إلى ملف التداول الموجود عندك.
-
-    ضع الرابط في Vercel باسم:
-
-    TRADE_EXECUTION_ENDPOINT
-
-    مثال:
-
-    https://fawaz-ai-bot.vercel.app/api/execute-trade
-  */
-
-  const endpoint =
-    process.env.TRADE_EXECUTION_ENDPOINT;
-
-  if (!endpoint) {
-    return {
-      success: false,
-      simulated: true,
-      reason:
-        "TRADE_EXECUTION_ENDPOINT_NOT_SET",
-    };
-  }
-
-  const secret =
-    process.env.AUTO_TRADER_SECRET;
-
-  const response = await fetch(endpoint, {
-    method: "POST",
-
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${secret}`,
-    },
-
-    body: JSON.stringify({
-      side,
-      slotId,
-      amountUsd,
-
-      inputMint:
-        side === "BUY"
-          ? USDC_MINT
-          : SOL_MINT,
-
-      outputMint:
-        side === "BUY"
-          ? SOL_MINT
-          : USDC_MINT,
-
-      slippageBps:
-        maxSlippageBps,
-    }),
-  });
-
-  const text = await response.text();
+  const text =
+    await response.text();
 
   let data;
 
   try {
-    data = JSON.parse(text);
+    data =
+      JSON.parse(text);
   } catch {
     data = {
-      raw: text,
+      raw: text
     };
   }
 
   if (!response.ok) {
+    throw new Error(
+      `HTTP_${response.status}:${JSON.stringify(
+        data
+      )}`
+    );
+  }
+
+  return data;
+}
+
+// ======================================================
+// GET FAST MARKET DATA
+// ======================================================
+
+async function getMarketData(
+  req
+) {
+  const baseUrl =
+    getBaseUrl(req);
+
+  const result =
+    await fetchJson(
+      `${baseUrl}/api/market-agent`,
+      {
+        method: "GET",
+
+        headers: {
+          Accept:
+            "application/json"
+        }
+      }
+    );
+
+  if (
+    result?.status !== "ok" ||
+    !result?.market
+  ) {
+    throw new Error(
+      "MARKET_AGENT_INVALID_RESPONSE"
+    );
+  }
+
+  return result;
+}
+
+// ======================================================
+// EXECUTION AGENT
+// ======================================================
+
+async function executeTrade({
+  req,
+  side,
+  slotId,
+  amountUsd = 0,
+  amountSol = 0,
+  slippageBps
+}) {
+  const baseUrl =
+    getBaseUrl(req);
+
+  const secret =
+    process.env.AUTO_TRADER_SECRET;
+
+  const payload = {
+    side,
+    slotId,
+
+    amountUsd:
+      number(amountUsd),
+
+    amountSol:
+      number(amountSol),
+
+    slippageBps:
+      clamp(
+        Math.floor(
+          number(
+            slippageBps,
+            20
+          )
+        ),
+        1,
+        CONFIG.maxSlippageBps
+      )
+  };
+
+  const result =
+    await fetchJson(
+      `${baseUrl}/api/execution-agent`,
+      {
+        method: "POST",
+
+        headers: {
+          "Content-Type":
+            "application/json",
+
+          Authorization:
+            `Bearer ${secret}`
+        },
+
+        body:
+          JSON.stringify(
+            payload
+          )
+      }
+    );
+
+  if (
+    result?.executed !== true
+  ) {
     return {
       success: false,
-      status: response.status,
-      data,
+      response: result
     };
   }
 
   return {
     success: true,
-    data,
+    response: result
   };
 }
 
 // ======================================================
-// OPEN SLOT
+// SLOT SIZE
 // ======================================================
 
-async function openSlot({
-  slot,
-  price,
-  amountUsd,
-  targetBps,
-}) {
-  const execution =
-    await executeTrade({
-      side: "BUY",
-
-      amountUsd,
-
-      slotId: slot.id,
-
-      maxSlippageBps:
-        CONFIG.maxSlippageBps,
-    });
-
-  if (!execution.success) {
-    return {
-      opened: false,
-      execution,
-    };
-  }
-
-  const quantity =
-    amountUsd / price;
-
-  slot.status = "OPEN";
-
-  slot.entryPrice = price;
-
-  slot.highestPrice = price;
-
-  slot.amountUsd = amountUsd;
-
-  slot.quantity = quantity;
-
-  slot.targetBps = targetBps;
-
-  slot.trailingActive = false;
-
-  slot.trailingDistanceBps =
-    Math.max(
-      8,
-      Math.round(
-        targetBps *
-          CONFIG.trailingDistancePct
-      )
+function getSlotUsd() {
+  const configured =
+    number(
+      process.env
+        .SCALPER_SLOT_USD
     );
 
-  slot.openedAt = Date.now();
+  if (configured > 0) {
+    return configured;
+  }
 
-  slot.lastUsedAt = Date.now();
+  const totalCapital =
+    number(
+      process.env
+        .SCALPER_CAPITAL_USD
+    );
 
-  globalState.stats.entries++;
+  if (totalCapital > 0) {
+    return (
+      totalCapital *
+      (1 - CONFIG.reservePct)
+    ) / CONFIG.maxSlots;
+  }
 
-  return {
-    opened: true,
-    slot,
-    execution,
-  };
+  return CONFIG.defaultSlotUsd;
+}
+
+function getTotalCapitalUsd() {
+  const configured =
+    number(
+      process.env
+        .SCALPER_CAPITAL_USD
+    );
+
+  if (configured > 0) {
+    return configured;
+  }
+
+  // 5$ × 4 Slots = 20$
+  // + 20% reserve => 25$
+  return (
+    getSlotUsd() *
+    CONFIG.maxSlots
+  ) / (1 - CONFIG.reservePct);
 }
 
 // ======================================================
-// CLOSE SLOT
+// DYNAMIC PROFIT TARGET
 // ======================================================
 
-async function closeSlot(
-  slot,
-  currentPrice,
-  reason
+function getTargetBps(
+  market,
+  riskMode
 ) {
-  const execution =
-    await executeTrade({
-      side: "SELL",
-
-      amountUsd: slot.amountUsd,
-
-      slotId: slot.id,
-
-      maxSlippageBps:
-        CONFIG.maxSlippageBps,
-    });
-
-  if (!execution.success) {
-    return {
-      closed: false,
-      execution,
-    };
-  }
-
-  const pnlBps =
-    percentageToBps(
-      (currentPrice -
-        slot.entryPrice) /
-        slot.entryPrice
-    );
-
-  const trade = {
-    slotId: slot.id,
-
-    entryPrice:
-      slot.entryPrice,
-
-    exitPrice:
-      currentPrice,
-
-    pnlBps,
-
-    reason,
-
-    openedAt:
-      slot.openedAt,
-
-    closedAt:
-      Date.now(),
-  };
-
-  globalState.recentTrades.push(trade);
+  let target =
+    CONFIG.calmTargetBps;
 
   if (
-    globalState.recentTrades.length > 50
+    market.mode === "NORMAL"
   ) {
-    globalState.recentTrades =
-      globalState.recentTrades.slice(-50);
+    target =
+      CONFIG.normalTargetBps;
   }
 
-  slot.status = "READY";
+  if (
+    market.mode === "FAST"
+  ) {
+    target =
+      CONFIG.fastTargetBps;
+  }
 
-  slot.entryPrice = null;
+  if (
+    riskMode === "FAST"
+  ) {
+    target *= 1.10;
+  }
 
-  slot.highestPrice = null;
+  if (
+    riskMode === "DEFENSIVE"
+  ) {
+    target *= 0.80;
+  }
 
-  slot.amountUsd = 0;
+  return Math.round(
+    clamp(
+      target,
+      20,
+      100
+    )
+  );
+}
 
-  slot.quantity = 0;
+// ======================================================
+// HOW MANY NEW SLOTS?
+// ======================================================
 
-  slot.targetBps = 0;
+function calculateEntriesToOpen(
+  market,
+  freeSlots
+) {
+  if (
+    freeSlots <= 0
+  ) {
+    return 0;
+  }
 
-  slot.trailingActive = false;
+  const score =
+    number(
+      market.scalpingScore
+    );
 
-  slot.trailingDistanceBps = 0;
+  let count = 1;
 
-  slot.openedAt = null;
+  // فرصة قوية
+  if (score >= 65) {
+    count = 2;
+  }
 
-  slot.closedAt = Date.now();
+  // فرصة قوية جدًا
+  if (score >= 80) {
+    count = 3;
+  }
 
-  slot.lastUsedAt = Date.now();
+  // قوة عالية + تذبذب سريع
+  if (
+    score >= 90 &&
+    market.mode === "FAST"
+  ) {
+    count = 4;
+  }
 
-  globalState.stats.exits++;
+  return Math.min(
+    count,
+    freeSlots,
+    CONFIG.maxNewSlotsPerCycle
+  );
+}
+
+// ======================================================
+// ENTRY CONDITIONS
+// ======================================================
+
+function analyzeEntry({
+  marketResult,
+  riskMode
+}) {
+  const market =
+    marketResult.market;
+
+  const signal =
+    marketResult.signal;
+
+  if (
+    signal?.action !== "BUY"
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "MARKET_SIGNAL_WAIT"
+    };
+  }
+
+  if (
+    riskMode === "PAUSED"
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "RISK_MODE_PAUSED"
+    };
+  }
+
+  if (
+    number(
+      market.scalpingScore
+    ) < 45
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "SCALPING_SCORE_LOW"
+    };
+  }
+
+  if (
+    number(
+      market.volatilityBps
+    ) < 3
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "VOLATILITY_TOO_LOW"
+    };
+  }
+
+  if (
+    number(
+      market.spreadBps
+    ) >
+    CONFIG.maxMarketSpreadBps
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "MARKET_SPREAD_TOO_WIDE"
+    };
+  }
 
   return {
-    closed: true,
-    pnlBps,
-    trade,
-    execution,
+    allowed: true,
+    reason:
+      "MICRO_SCALP_SETUP"
   };
 }
 
 // ======================================================
-// MANAGE ALL OPEN SLOTS
+// MANAGE EXISTING POSITIONS
 // ======================================================
 
-async function manageOpenSlots(price) {
+async function managePositions({
+  req,
+  walletAddress,
+  positions,
+  market
+}) {
   const events = [];
 
-  const slots =
-    getOpenSlots();
+  const currentPrice =
+    number(
+      market.price
+    );
 
-  /*
-    كل Slot يتم تقييمه بشكل مستقل.
-    ما ننتظر صفقة تخلص عشان ندير الثانية.
-  */
-
-  for (const slot of slots) {
-    if (
-      !slot.entryPrice ||
-      slot.entryPrice <= 0
-    ) {
-      continue;
-    }
-
-    if (
-      !slot.highestPrice ||
-      price > slot.highestPrice
-    ) {
-      slot.highestPrice = price;
-    }
-
-    const pnlBps =
-      percentageToBps(
-        (price -
-          slot.entryPrice) /
-          slot.entryPrice
-      );
-
-    const activationBps =
-      slot.targetBps *
-      CONFIG.trailingActivationPct;
-
-    // تفعيل Trailing
-    if (
-      !slot.trailingActive &&
-      pnlBps >= activationBps
-    ) {
-      slot.trailingActive = true;
-
-      events.push({
-        slotId: slot.id,
-        event:
-          "TRAILING_ACTIVATED",
-        pnlBps,
-      });
-    }
-
-    // STOP LOSS
-    if (
-      pnlBps <=
-      -CONFIG.stopLossBps
-    ) {
-      const close =
-        await closeSlot(
-          slot,
-          price,
-          "STOP_LOSS"
+  for (
+    const position
+    of positions
+  ) {
+    try {
+      const entryPrice =
+        number(
+          position.entry_price
         );
 
-      events.push({
-        slotId: slot.id,
-        event: "STOP_LOSS",
-        ...close,
-      });
-
-      continue;
-    }
-
-    // TRAILING PROFIT
-    if (slot.trailingActive) {
-      const dropFromHighBps =
-        percentageToBps(
-          (slot.highestPrice -
-            price) /
-            slot.highestPrice
+      const entrySol =
+        number(
+          position.entry_sol
         );
 
       if (
-        dropFromHighBps >=
-        slot.trailingDistanceBps
+        entryPrice <= 0 ||
+        entrySol <= 0
       ) {
-        const close =
-          await closeSlot(
-            slot,
-            price,
-            "TRAILING_PROFIT"
-          );
-
         events.push({
-          slotId: slot.id,
+          positionId:
+            position.id,
+
+          slotId:
+            position.slot_id,
+
           event:
-            "TRAILING_EXIT",
-          ...close,
+            "INVALID_POSITION_DATA"
         });
 
         continue;
       }
-    }
 
-    // خروج إجباري إذا امتدت الحركة كثيرًا
-    if (
-      pnlBps >=
-      slot.targetBps * 1.35
-    ) {
-      const close =
-        await closeSlot(
-          slot,
-          price,
-          "TARGET_EXIT"
+      const pnlBps =
+        toBps(
+          (
+            currentPrice -
+            entryPrice
+          ) /
+          entryPrice
         );
 
+      let highestPrice =
+        number(
+          position.highest_price,
+          entryPrice
+        );
+
+      // ----------------------------------------------
+      // UPDATE HIGH
+      // ----------------------------------------------
+
+      if (
+        currentPrice >
+        highestPrice
+      ) {
+        highestPrice =
+          currentPrice;
+
+        await updateHighestPrice({
+          id:
+            position.id,
+
+          highestPrice
+        });
+      }
+
+      const targetBps =
+        number(
+          position.target_bps,
+          CONFIG.normalTargetBps
+        );
+
+      const activationBps =
+        targetBps *
+        CONFIG
+          .trailingActivationPct;
+
+      let trailingActive =
+        position
+          .trailing_active === true;
+
+      // ----------------------------------------------
+      // ENABLE TRAILING
+      // ----------------------------------------------
+
+      if (
+        !trailingActive &&
+        pnlBps >=
+          activationBps
+      ) {
+        await activateTrailing({
+          id:
+            position.id,
+
+          highestPrice
+        });
+
+        trailingActive =
+          true;
+
+        events.push({
+          positionId:
+            position.id,
+
+          slotId:
+            position.slot_id,
+
+          event:
+            "TRAILING_ACTIVATED",
+
+          pnlBps:
+            Number(
+              pnlBps.toFixed(2)
+            )
+        });
+      }
+
+      // ----------------------------------------------
+      // STOP LOSS
+      // ----------------------------------------------
+
+      if (
+        pnlBps <=
+        -CONFIG.stopLossBps
+      ) {
+        const execution =
+          await executeTrade({
+            req,
+
+            side: "SELL",
+
+            slotId:
+              position.slot_id,
+
+            amountSol:
+              entrySol,
+
+            slippageBps:
+              CONFIG.maxSlippageBps
+          });
+
+        if (
+          !execution.success
+        ) {
+          events.push({
+            positionId:
+              position.id,
+
+            slotId:
+              position.slot_id,
+
+            event:
+              "STOP_LOSS_SELL_FAILED",
+
+            execution:
+              execution.response
+          });
+
+          continue;
+        }
+
+        const outAtomic =
+          execution.response
+            ?.quote
+            ?.outAmount;
+
+        const exitUsdc =
+          atomicToAmount(
+            outAtomic,
+            USDC_DECIMALS
+          );
+
+        const closed =
+          await closePosition({
+            id:
+              position.id,
+
+            exitPrice:
+              currentPrice,
+
+            exitUsdc,
+
+            signature:
+              execution.response
+                .signature,
+
+            reason:
+              "STOP_LOSS"
+          });
+
+        events.push({
+          positionId:
+            position.id,
+
+          slotId:
+            position.slot_id,
+
+          event:
+            "STOP_LOSS_EXIT",
+
+          pnl:
+            closed.realized_pnl,
+
+          pnlPct:
+            closed.realized_pnl_pct
+        });
+
+        continue;
+      }
+
+      // ----------------------------------------------
+      // TRAILING EXIT
+      // ----------------------------------------------
+
+      if (
+        trailingActive
+      ) {
+        const trailingDistanceBps =
+          number(
+            position
+              .trailing_distance_bps,
+            Math.max(
+              8,
+              targetBps *
+                CONFIG
+                  .trailingDistancePct
+            )
+          );
+
+        const dropFromHighBps =
+          highestPrice > 0
+            ? toBps(
+                (
+                  highestPrice -
+                  currentPrice
+                ) /
+                highestPrice
+              )
+            : 0;
+
+        if (
+          dropFromHighBps >=
+          trailingDistanceBps
+        ) {
+          const execution =
+            await executeTrade({
+              req,
+
+              side:
+                "SELL",
+
+              slotId:
+                position.slot_id,
+
+              amountSol:
+                entrySol,
+
+              slippageBps:
+                CONFIG
+                  .maxSlippageBps
+            });
+
+          if (
+            !execution.success
+          ) {
+            events.push({
+              positionId:
+                position.id,
+
+              slotId:
+                position.slot_id,
+
+              event:
+                "TRAILING_SELL_FAILED",
+
+              execution:
+                execution.response
+            });
+
+            continue;
+          }
+
+          const exitUsdc =
+            atomicToAmount(
+              execution
+                .response
+                ?.quote
+                ?.outAmount,
+
+              USDC_DECIMALS
+            );
+
+          const closed =
+            await closePosition({
+              id:
+                position.id,
+
+              exitPrice:
+                currentPrice,
+
+              exitUsdc,
+
+              signature:
+                execution
+                  .response
+                  .signature,
+
+              reason:
+                "TRAILING_PROFIT"
+            });
+
+          events.push({
+            positionId:
+              position.id,
+
+            slotId:
+              position.slot_id,
+
+            event:
+              "TRAILING_EXIT",
+
+            pnl:
+              closed
+                .realized_pnl,
+
+            pnlPct:
+              closed
+                .realized_pnl_pct
+          });
+
+          continue;
+        }
+      }
+
+      // ----------------------------------------------
+      // HARD TARGET EXIT
+      // ----------------------------------------------
+
+      if (
+        pnlBps >=
+        targetBps * 1.40
+      ) {
+        const execution =
+          await executeTrade({
+            req,
+
+            side: "SELL",
+
+            slotId:
+              position.slot_id,
+
+            amountSol:
+              entrySol,
+
+            slippageBps:
+              CONFIG.maxSlippageBps
+          });
+
+        if (
+          !execution.success
+        ) {
+          events.push({
+            positionId:
+              position.id,
+
+            slotId:
+              position.slot_id,
+
+            event:
+              "TARGET_SELL_FAILED",
+
+            execution:
+              execution.response
+          });
+
+          continue;
+        }
+
+        const exitUsdc =
+          atomicToAmount(
+            execution
+              .response
+              ?.quote
+              ?.outAmount,
+
+            USDC_DECIMALS
+          );
+
+        const closed =
+          await closePosition({
+            id:
+              position.id,
+
+            exitPrice:
+              currentPrice,
+
+            exitUsdc,
+
+            signature:
+              execution
+                .response
+                .signature,
+
+            reason:
+              "TARGET_PROFIT"
+          });
+
+        events.push({
+          positionId:
+            position.id,
+
+          slotId:
+            position.slot_id,
+
+          event:
+            "TARGET_EXIT",
+
+          pnl:
+            closed.realized_pnl,
+
+          pnlPct:
+            closed.realized_pnl_pct
+        });
+
+        continue;
+      }
+
       events.push({
-        slotId: slot.id,
+        positionId:
+          position.id,
+
+        slotId:
+          position.slot_id,
+
         event:
-          "TARGET_EXIT",
-        ...close,
+          "KEEP_POSITION_OPEN",
+
+        pnlBps:
+          Number(
+            pnlBps.toFixed(2)
+          ),
+
+        entryPrice,
+
+        currentPrice,
+
+        highestPrice
+      });
+
+    } catch (error) {
+      events.push({
+        positionId:
+          position.id,
+
+        slotId:
+          position.slot_id,
+
+        event:
+          "POSITION_ERROR",
+
+        error:
+          error?.message ||
+          "Unknown position error"
       });
     }
   }
@@ -789,66 +1070,70 @@ async function manageOpenSlots(price) {
 }
 
 // ======================================================
-// SEARCH FOR NEW POSITION
+// OPEN NEW SLOT
 // ======================================================
 
-async function searchForEntry({
-  price,
-  metrics,
-  mode,
+async function openNewSlot({
+  req,
+  walletAddress,
+  slotId,
+  slotUsd,
+  targetBps,
+  market,
+  recentTrades,
+  currentPositions
 }) {
-  const slot =
-    getReadySlot();
-
-  if (!slot) {
-    return {
-      skipped: true,
-      reason:
-        "ALL_SLOTS_BUSY",
-    };
-  }
-
-  const opportunity =
-    detectEntryOpportunity({
-      price,
-      metrics,
-      mode,
-    });
-
-  if (!opportunity.enter) {
-    globalState.stats.skipped++;
-
-    return {
-      skipped: true,
-      reason:
-        opportunity.reason,
-    };
-  }
-
-  const amountUsd =
-    calculateSlotAmount();
+  const estimatedSlippageBps =
+    Math.max(
+      4,
+      Math.ceil(
+        number(
+          market.spreadBps
+        ) / 2
+      )
+    );
 
   const candidate = {
-    amountUsd,
+    amountUsd:
+      slotUsd,
 
     expectedMoveBps:
-      opportunity.estimatedMoveBps,
+      targetBps,
 
-    /*
-      مؤقتًا تقدير للانزلاق.
-      الأفضل لاحقًا نجيبه من Quote الحقيقي.
-    */
-    estimatedSlippageBps: 8,
+    estimatedSlippageBps,
 
     buyFeeBps: 0,
 
-    sellFeeBps: 0,
+    sellFeeBps: 0
+  };
+
+  const riskState = {
+    totalCapitalUsd:
+      getTotalCapitalUsd(),
+
+    recentTrades,
+
+    slots:
+      currentPositions.map(
+        (position) => ({
+          id:
+            position.slot_id,
+
+          status:
+            "OPEN",
+
+          amountUsd:
+            number(
+              position.entry_usdc
+            )
+        })
+      )
   };
 
   const risk =
     evaluateRisk({
       state:
-        globalState,
+        riskState,
 
       candidate,
 
@@ -857,300 +1142,572 @@ async function searchForEntry({
           CONFIG.maxSlots,
 
         maxSlippageBps:
-          CONFIG.maxSlippageBps,
+          CONFIG
+            .maxSlippageBps,
 
         minNetEdgeBps:
-          CONFIG.minNetEdgeBps,
-      },
+          CONFIG
+            .minNetEdgeBps
+      }
     });
 
-  if (!risk.allowed) {
-    globalState.stats.skipped++;
-
-    if (
-      risk.reason ===
-      "LOSS_STREAK"
-    ) {
-      globalState.cooldownUntil =
-        Date.now() +
-        Number(
-          risk.cooldownMs ||
-            300000
-        );
-    }
-
+  if (
+    !risk.allowed
+  ) {
     return {
-      skipped: true,
-      opportunity,
-      risk,
+      opened: false,
+      slotId,
+      reason:
+        risk.reason,
+      risk
     };
   }
 
-  const opened =
-    await openSlot({
-      slot,
-      price,
-      amountUsd,
+  // ==================================================
+  // EXECUTE REAL BUY
+  // ==================================================
 
-      targetBps:
-        opportunity.estimatedMoveBps,
+  const execution =
+    await executeTrade({
+      req,
+
+      side: "BUY",
+
+      slotId,
+
+      amountUsd:
+        slotUsd,
+
+      slippageBps:
+        Math.min(
+          CONFIG.maxSlippageBps,
+          Math.max(
+            8,
+            estimatedSlippageBps
+          )
+        )
+    });
+
+  if (
+    !execution.success
+  ) {
+    return {
+      opened: false,
+      slotId,
+      reason:
+        "BUY_EXECUTION_FAILED",
+
+      execution:
+        execution.response
+    };
+  }
+
+  // ==================================================
+  // ACTUAL JUPITER SOL RECEIVED
+  // ==================================================
+
+  const solReceived =
+    atomicToAmount(
+      execution
+        .response
+        ?.quote
+        ?.outAmount,
+
+      SOL_DECIMALS
+    );
+
+  if (
+    !Number.isFinite(
+      solReceived
+    ) ||
+    solReceived <= 0
+  ) {
+    throw new Error(
+      "INVALID_ACTUAL_SOL_RECEIVED"
+    );
+  }
+
+  // Actual executed entry price
+  const actualEntryPrice =
+    slotUsd /
+    solReceived;
+
+  const trailingDistanceBps =
+    Math.max(
+      8,
+      Math.round(
+        targetBps *
+        CONFIG
+          .trailingDistancePct
+      )
+    );
+
+  // ==================================================
+  // SAVE SLOT IN NEON
+  // ==================================================
+
+  const saved =
+    await openPosition({
+      walletAddress,
+
+      slotId,
+
+      entryPrice:
+        actualEntryPrice,
+
+      entrySol:
+        solReceived,
+
+      entryUsdc:
+        slotUsd,
+
+      signature:
+        execution
+          .response
+          .signature,
+
+      strategy:
+        "PARALLEL_MICRO_SCALP",
+
+      targetBps,
+
+      trailingDistanceBps
     });
 
   return {
-    opportunity,
-    risk,
-    opened,
+    opened: true,
+
+    slotId,
+
+    positionId:
+      saved.id,
+
+    entryUsdc:
+      slotUsd,
+
+    entrySol:
+      solReceived,
+
+    entryPrice:
+      actualEntryPrice,
+
+    targetBps,
+
+    signature:
+      execution
+        .response
+        .signature
   };
 }
 
 // ======================================================
-// MAIN HANDLER
+// OPEN MULTIPLE SLOTS
+// ======================================================
+
+async function openOpportunitySlots({
+  req,
+  walletAddress,
+  marketResult,
+  recentTrades,
+  riskMode
+}) {
+  const events = [];
+
+  const entryCheck =
+    analyzeEntry({
+      marketResult,
+      riskMode
+    });
+
+  if (
+    !entryCheck.allowed
+  ) {
+    return [{
+      event:
+        "NO_NEW_ENTRY",
+
+      reason:
+        entryCheck.reason
+    }];
+  }
+
+  let positions =
+    await getOpenPositions(
+      walletAddress
+    );
+
+  const freeCount =
+    Math.max(
+      0,
+      CONFIG.maxSlots -
+      positions.length
+    );
+
+  if (
+    freeCount <= 0
+  ) {
+    return [{
+      event:
+        "ALL_SLOTS_BUSY"
+    }];
+  }
+
+  const market =
+    marketResult.market;
+
+  const count =
+    calculateEntriesToOpen(
+      market,
+      freeCount
+    );
+
+  const targetBps =
+    getTargetBps(
+      market,
+      riskMode
+    );
+
+  const slotUsd =
+    getSlotUsd();
+
+  // ==================================================
+  // A STRONG OPPORTUNITY CAN FILL SEVERAL SLOTS
+  // ==================================================
+
+  for (
+    let i = 0;
+    i < count;
+    i++
+  ) {
+    // re-read DB every time
+    // so slots stay independent
+    positions =
+      await getOpenPositions(
+        walletAddress
+      );
+
+    const slotId =
+      await getFreeSlot(
+        walletAddress,
+        CONFIG.maxSlots
+      );
+
+    if (!slotId) {
+      break;
+    }
+
+    try {
+      const opened =
+        await openNewSlot({
+          req,
+
+          walletAddress,
+
+          slotId,
+
+          slotUsd,
+
+          targetBps,
+
+          market,
+
+          recentTrades,
+
+          currentPositions:
+            positions
+        });
+
+      events.push({
+        event:
+          opened.opened
+            ? "SLOT_OPENED"
+            : "SLOT_SKIPPED",
+
+        ...opened
+      });
+
+      /*
+        إذا Risk Agent رفض،
+        ما نحاول نفتح بقية Slots
+        بنفس الفرصة.
+      */
+      if (
+        !opened.opened &&
+        opened.reason !==
+          "BUY_EXECUTION_FAILED"
+      ) {
+        break;
+      }
+
+    } catch (error) {
+      events.push({
+        event:
+          "SLOT_OPEN_ERROR",
+
+        slotId,
+
+        error:
+          error?.message ||
+          "Unknown slot error"
+      });
+
+      break;
+    }
+  }
+
+  return events;
+}
+
+// ======================================================
+// MAIN
 // ======================================================
 
 export default async function handler(
   req,
   res
 ) {
+  // ==================================================
+  // METHOD
+  // ==================================================
+
+  if (
+    req.method !== "GET" &&
+    req.method !== "POST"
+  ) {
+    return res
+      .status(405)
+      .json({
+        status: "error",
+        message:
+          "GET or POST only"
+      });
+  }
+
+  // ==================================================
+  // AUTH
+  // ==================================================
+
+  const auth =
+    authorize(req);
+
+  if (!auth.ok) {
+    return res
+      .status(auth.status)
+      .json({
+        status: "error",
+        reason:
+          auth.reason
+      });
+  }
+
   try {
-    // ---------------------------------------------
-    // AUTH
-    // ---------------------------------------------
+    const walletAddress =
+      getWalletAddress();
 
-    const auth =
-      getAuthorization(req);
+    // ==================================================
+    // MARKET + HISTORY
+    // ==================================================
 
-    if (!auth.ok) {
-      return res
-        .status(
-          auth.reason ===
-            "UNAUTHORIZED"
-            ? 401
-            : 500
+    const [
+      marketResult,
+      recentTrades
+    ] =
+      await Promise.all([
+        getMarketData(req),
+
+        getRecentClosedTrades(
+          walletAddress,
+          20
         )
-        .json({
-          ok: false,
-          error: auth.reason,
-        });
-    }
+      ]);
 
-    globalState.stats.scanned++;
+    const market =
+      marketResult.market;
 
-    // ---------------------------------------------
-    // CAPITAL
-    // ---------------------------------------------
-
-    const configuredCapital =
-      Number(
-        process.env
-          .SCALPER_CAPITAL_USD
-      );
-
-    if (
-      configuredCapital > 0
-    ) {
-      globalState.totalCapitalUsd =
-        configuredCapital;
-    }
-
-    if (
-      globalState.totalCapitalUsd <= 0
-    ) {
-      return res
-        .status(400)
-        .json({
-          ok: false,
-
-          error:
-            "SCALPER_CAPITAL_USD_NOT_SET",
-
-          message:
-            "ضع SCALPER_CAPITAL_USD في Environment Variables.",
-        });
-    }
-
-    // ---------------------------------------------
-    // PRICE
-    // ---------------------------------------------
-
-    const price =
-      await getMarketPrice(req);
-
-    pushPrice(price);
-
-    // ---------------------------------------------
-    // ANALYSIS
-    // ---------------------------------------------
-
-    const metrics =
-      calculateMarketMetrics();
-
-    const mode =
+    const riskMode =
       getDynamicRiskMode(
-        globalState.recentTrades
+        recentTrades
       );
 
-    // ---------------------------------------------
-    // MANAGE EXISTING TRADES
-    // ---------------------------------------------
+    // ==================================================
+    // READ ALL OPEN POSITIONS FROM NEON
+    // ==================================================
+
+    const positionsBefore =
+      await getOpenPositions(
+        walletAddress
+      );
+
+    // ==================================================
+    // MANAGE ALL EXISTING POSITIONS
+    // ==================================================
 
     const positionEvents =
-      await manageOpenSlots(price);
+      await managePositions({
+        req,
 
-    // ---------------------------------------------
-    // SEARCH FOR NEW TRADE
-    // ---------------------------------------------
+        walletAddress,
 
-    let entryEvent = null;
+        positions:
+          positionsBefore,
 
-    if (mode === "PAUSED") {
-      entryEvent = {
-        skipped: true,
-        reason:
-          "PERFORMANCE_PAUSED",
-      };
-    } else if (
-      globalState.cooldownUntil &&
-      Date.now() <
-        globalState.cooldownUntil
-    ) {
-      entryEvent = {
-        skipped: true,
-        reason: "COOLDOWN",
-        cooldownUntil:
-          globalState.cooldownUntil,
-      };
-    } else {
-      /*
-        مهم جدًا:
-        بعد إدارة الصفقات المفتوحة
-        نبحث فورًا عن فرصة جديدة.
+        market
+      });
 
-        لو فيه Slot فاضي يدخل،
-        حتى لو Slots ثانية ما زالت مفتوحة.
-      */
+    // ==================================================
+    // AFTER SELLS, LOOK FOR NEW ENTRIES IMMEDIATELY
+    // ==================================================
 
-      entryEvent =
-        await searchForEntry({
-          price,
-          metrics,
-          mode,
-        });
-    }
+    const entryEvents =
+      await openOpportunitySlots({
+        req,
 
-    // ---------------------------------------------
-    // RESPONSE
-    // ---------------------------------------------
+        walletAddress,
 
-    const openSlots =
-      getOpenSlots();
+        marketResult,
 
-    const readySlots =
-      globalState.slots.filter(
-        (slot) =>
-          slot.status === "READY"
+        recentTrades,
+
+        riskMode
+      });
+
+    // ==================================================
+    // FINAL DASHBOARD FROM NEON
+    // ==================================================
+
+    const dashboard =
+      await getTradingDashboard(
+        walletAddress
       );
+
+    const openPositions =
+      dashboard
+        .openPositions ||
+      [];
 
     return res
       .status(200)
       .json({
-        ok: true,
+        status: "ok",
 
         engine:
-          "FAWAZ_PARALLEL_MICRO_SCALPER_V2",
+          "FAWAZ_PARALLEL_MICRO_SCALPER_V4",
 
-        mode,
+        running: true,
+
+        walletAddress,
+
+        riskMode,
 
         market: {
-          symbol:
-            "SOL/USDC",
+          pair:
+            "SOL-USDC",
 
-          price,
+          price:
+            market.price,
 
-          momentumBps:
-            Number(
-              metrics.momentumBps.toFixed(
-                2
-              )
-            ),
+          bid:
+            market.bid,
+
+          ask:
+            market.ask,
+
+          spreadBps:
+            market
+              .spreadBps,
 
           volatilityBps:
-            Number(
-              metrics.volatilityBps.toFixed(
-                2
-              )
-            ),
+            market
+              .volatilityBps,
 
-          shortMoveBps:
-            Number(
-              metrics.shortMoveBps.toFixed(
-                2
-              )
-            ),
+          microRangeBps:
+            market
+              .microRangeBps,
+
+          momentum1mBps:
+            market
+              .momentum1mBps,
+
+          momentum3mBps:
+            market
+              .momentum3mBps,
 
           direction:
-            metrics.direction,
+            market.direction,
+
+          mode:
+            market.mode,
+
+          scalpingScore:
+            market
+              .scalpingScore
         },
 
-        capital: {
-          totalUsd:
-            globalState.totalCapitalUsd,
+        signal:
+          marketResult.signal,
 
-          reservePct:
-            CONFIG.reservePct,
-
-          slotAmountUsd:
-            calculateSlotAmount(),
-        },
-
-        slotsSummary: {
-          total:
+        slots: {
+          maximum:
             CONFIG.maxSlots,
 
           open:
-            openSlots.length,
+            openPositions.length,
 
-          ready:
-            readySlots.length,
+          free:
+            Math.max(
+              0,
+              CONFIG.maxSlots -
+              openPositions.length
+            ),
+
+          slotUsd:
+            getSlotUsd()
         },
-
-        slots:
-          globalState.slots,
 
         positionEvents,
 
-        entryEvent,
+        entryEvents,
 
-        recentTrades:
-          globalState.recentTrades.slice(
-            -10
-          ),
+        openPosition:
+          dashboard
+            .openPosition,
 
-        stats:
-          globalState.stats,
+        openPositions,
+
+        last24Hours:
+          dashboard
+            .last24Hours,
+
+        allTime:
+          dashboard
+            .allTime,
 
         timestamp:
-          new Date().toISOString(),
+          new Date()
+            .toISOString()
       });
+
   } catch (error) {
     console.error(
-      "TRADE_ORCHESTRATOR_ERROR",
+      "Trade Orchestrator Error:",
       error
     );
 
     return res
       .status(500)
       .json({
-        ok: false,
+        status: "error",
 
         engine:
-          "FAWAZ_PARALLEL_MICRO_SCALPER_V2",
+          "FAWAZ_PARALLEL_MICRO_SCALPER_V4",
 
-        error:
+        message:
           error?.message ||
-          "UNKNOWN_ERROR",
+          "Trade orchestrator failed",
 
         timestamp:
-          new Date().toISOString(),
+          new Date()
+            .toISOString()
       });
   }
 }
