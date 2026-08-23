@@ -1,14 +1,43 @@
+import {
+  getOpenPosition,
+  openPosition,
+  closePosition,
+  get24HourStats,
+  getAllTimeStats
+} from "./trading-store.js";
+
 const USDC_MINT =
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 const RPC_URL =
   "https://api.mainnet-beta.solana.com";
 
-const BUY_USDC_AMOUNT = 0.5;
-const SELL_SOL_AMOUNT = 0.005;
+// =========================
+// TRADING SETTINGS
+// =========================
 
-const SOL_FLOOR = 0.1;
-const MIN_USDC_TO_BUY = 0.55;
+const BUY_USDC_AMOUNT = 5;
+
+// أقصى عدد صفقات مغلقة خلال 24 ساعة
+const MAX_TRADES_24H = 20;
+
+// هدف الربح الأساسي
+const TAKE_PROFIT_PCT = 0.8;
+
+// وقف الخسارة
+const STOP_LOSS_PCT = -0.5;
+
+// حماية ربح صغير عند انعكاس السوق
+const PROTECT_PROFIT_PCT = 0.35;
+
+// إيقاف التداول إذا وصلت خسائر 24 ساعة لهذا الرقم
+const DAILY_MAX_LOSS_USDC = -1.5;
+
+// الحد الأدنى للدخول
+const MIN_ENTRY_MOMENTUM = 0.15;
+
+// لا ندخل إذا السوق شبه ميت
+const MIN_VOLATILITY = 0.02;
 
 
 // =========================
@@ -29,7 +58,7 @@ async function getMarketData() {
     result.data.length < 30
   ) {
     throw new Error(
-      "Failed to load market candles"
+      "Failed to load OKX market candles"
     );
   }
 
@@ -40,7 +69,7 @@ async function getMarketData() {
 
   if (closes.length < 30) {
     throw new Error(
-      "Not enough valid candles"
+      "Not enough valid market candles"
     );
   }
 
@@ -103,7 +132,7 @@ async function getMarketData() {
   }
 
   const volatility =
-    changes.length > 0
+    changes.length
       ? changes.reduce(
           (a, b) => a + b,
           0
@@ -233,95 +262,6 @@ async function getUsdcBalance(
 
 
 // =========================
-// DECISION
-// =========================
-
-function makeDecision(
-  market,
-  balances
-) {
-  const {
-    sma10,
-    sma30,
-    momentum
-  } = market;
-
-  const {
-    solBalance,
-    usdcBalance
-  } = balances;
-
-  const bullishTrend =
-    sma10 > sma30;
-
-  const positiveMomentum =
-    momentum > 0.15;
-
-  if (
-    bullishTrend &&
-    positiveMomentum &&
-    usdcBalance >=
-      MIN_USDC_TO_BUY
-  ) {
-    return {
-      decision: "BUY",
-
-      confidence:
-        momentum > 0.35
-          ? 85
-          : 75,
-
-      amount:
-        BUY_USDC_AMOUNT,
-
-      reason:
-        "Bullish trend with positive momentum"
-    };
-  }
-
-  const bearishTrend =
-    sma10 < sma30;
-
-  const negativeMomentum =
-    momentum < -0.15;
-
-  const canSell =
-    solBalance -
-      SELL_SOL_AMOUNT >=
-    SOL_FLOOR;
-
-  if (
-    bearishTrend &&
-    negativeMomentum &&
-    canSell
-  ) {
-    return {
-      decision: "SELL",
-
-      confidence:
-        momentum < -0.35
-          ? 85
-          : 75,
-
-      amount:
-        SELL_SOL_AMOUNT,
-
-      reason:
-        "Bearish trend with negative momentum"
-    };
-  }
-
-  return {
-    decision: "HOLD",
-    confidence: 60,
-    amount: 0,
-    reason:
-      "No strong trading setup"
-  };
-}
-
-
-// =========================
 // INTERNAL API URL
 // =========================
 
@@ -357,44 +297,44 @@ async function callRiskAgent({
   market,
   balances
 }) {
-  const url =
-    buildApiUrl(
-      req,
-      "/api/risk-agent"
-    );
-
   const response =
-    await fetch(url, {
-      method: "POST",
+    await fetch(
+      buildApiUrl(
+        req,
+        "/api/risk-agent"
+      ),
+      {
+        method: "POST",
 
-      headers: {
-        "Content-Type":
-          "application/json"
-      },
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
 
-      body: JSON.stringify({
-        decision:
-          trade.decision,
+        body: JSON.stringify({
+          decision:
+            trade.decision,
 
-        confidence:
-          trade.confidence,
+          confidence:
+            trade.confidence,
 
-        amount:
-          trade.amount,
+          amount:
+            trade.amount,
 
-        solBalance:
-          balances.solBalance,
+          solBalance:
+            balances.solBalance,
 
-        usdcBalance:
-          balances.usdcBalance,
+          usdcBalance:
+            balances.usdcBalance,
 
-        momentum:
-          market.momentum,
+          momentum:
+            market.momentum,
 
-        volatility:
-          market.volatility
-      })
-    });
+          volatility:
+            market.volatility
+        })
+      }
+    );
 
   const data =
     await response.json();
@@ -420,37 +360,37 @@ async function callExecutionAgent({
   trade,
   risk
 }) {
-  const url =
-    buildApiUrl(
-      req,
-      "/api/execution-agent"
-    );
-
   const response =
-    await fetch(url, {
-      method: "POST",
+    await fetch(
+      buildApiUrl(
+        req,
+        "/api/execution-agent"
+      ),
+      {
+        method: "POST",
 
-      headers: {
-        "Content-Type":
-          "application/json"
-      },
+        headers: {
+          "Content-Type":
+            "application/json"
+        },
 
-      body: JSON.stringify({
-        decision:
-          trade.decision,
+        body: JSON.stringify({
+          decision:
+            trade.decision,
 
-        confidence:
-          trade.confidence,
+          confidence:
+            trade.confidence,
 
-        riskApproved:
-          risk.riskApproved === true,
+          riskApproved:
+            risk.riskApproved === true,
 
-        amount:
-          trade.amount,
+          amount:
+            trade.amount,
 
-        walletAddress
-      })
-    });
+          walletAddress
+        })
+      }
+    );
 
   const data =
     await response.json();
@@ -467,7 +407,171 @@ async function callExecutionAgent({
 
 
 // =========================
-// MAIN HANDLER
+// ENTRY DECISION
+// =========================
+
+function findEntrySignal(
+  market,
+  balances
+) {
+  if (
+    balances.usdcBalance <
+    BUY_USDC_AMOUNT
+  ) {
+    return {
+      decision: "HOLD",
+      confidence: 0,
+      amount: 0,
+      reason:
+        "Not enough USDC for 5 USDC trade"
+    };
+  }
+
+  const bullishTrend =
+    market.sma10 >
+    market.sma30;
+
+  const strongMomentum =
+    market.momentum >
+    MIN_ENTRY_MOMENTUM;
+
+  const enoughMovement =
+    market.volatility >=
+    MIN_VOLATILITY;
+
+  if (
+    bullishTrend &&
+    strongMomentum &&
+    enoughMovement
+  ) {
+    const confidence =
+      market.momentum > 0.35
+        ? 85
+        : 75;
+
+    return {
+      decision: "BUY",
+      confidence,
+      amount:
+        BUY_USDC_AMOUNT,
+
+      reason:
+        "Bullish short-term trend with usable volatility"
+    };
+  }
+
+  return {
+    decision: "HOLD",
+    confidence: 60,
+    amount: 0,
+    reason:
+      "No strong scalping entry"
+  };
+}
+
+
+// =========================
+// OPEN POSITION LOGIC
+// =========================
+
+function evaluateOpenPosition(
+  position,
+  market
+) {
+  const entryPrice =
+    Number(
+      position.entry_price
+    );
+
+  if (
+    !Number.isFinite(entryPrice) ||
+    entryPrice <= 0
+  ) {
+    throw new Error(
+      "Invalid stored entry price"
+    );
+  }
+
+  const pnlPct =
+    (
+      (
+        market.currentPrice -
+        entryPrice
+      ) /
+      entryPrice
+    ) *
+    100;
+
+  // =========================
+  // TAKE PROFIT
+  // =========================
+
+  if (
+    pnlPct >=
+    TAKE_PROFIT_PCT
+  ) {
+    return {
+      shouldSell: true,
+      reason:
+        "TAKE_PROFIT",
+      pnlPct
+    };
+  }
+
+  // =========================
+  // STOP LOSS
+  // =========================
+
+  if (
+    pnlPct <=
+    STOP_LOSS_PCT
+  ) {
+    return {
+      shouldSell: true,
+      reason:
+        "STOP_LOSS",
+      pnlPct
+    };
+  }
+
+  // =========================
+  // PROTECT SMALL PROFIT
+  // =========================
+
+  const momentumTurningDown =
+    market.momentum <= 0;
+
+  const trendTurningDown =
+    market.sma10 <
+    market.sma30;
+
+  if (
+    pnlPct >=
+      PROTECT_PROFIT_PCT &&
+    (
+      momentumTurningDown ||
+      trendTurningDown
+    )
+  ) {
+    return {
+      shouldSell: true,
+      reason:
+        "PROTECT_SMALL_PROFIT",
+      pnlPct
+    };
+  }
+
+  return {
+    shouldSell: false,
+    reason:
+      "KEEP_POSITION_OPEN",
+    pnlPct
+  };
+}
+
+
+// =========================
+// MAIN
 // =========================
 
 export default async function handler(
@@ -494,20 +598,22 @@ export default async function handler(
     ) {
       return res.status(400).json({
         status: "error",
-
         message:
           "Valid walletAddress required"
       });
     }
 
     // =========================
-    // LOAD EVERYTHING
+    // LOAD DATA
     // =========================
 
     const [
       market,
       solBalance,
-      usdcBalance
+      usdcBalance,
+      openTrade,
+      stats24h,
+      allTime
     ] = await Promise.all([
       getMarketData(),
 
@@ -517,6 +623,18 @@ export default async function handler(
 
       getUsdcBalance(
         walletAddress
+      ),
+
+      getOpenPosition(
+        walletAddress
+      ),
+
+      get24HourStats(
+        walletAddress
+      ),
+
+      getAllTimeStats(
+        walletAddress
       )
     ]);
 
@@ -525,22 +643,273 @@ export default async function handler(
       usdcBalance
     };
 
+
     // =========================
-    // MAKE DECISION
+    // DAILY TRADE LIMIT
     // =========================
 
+    if (
+      !openTrade &&
+      stats24h.trades >=
+        MAX_TRADES_24H
+    ) {
+      return res.status(200).json({
+        status: "paused",
+        decision: "HOLD",
+
+        reason:
+          "24 hour trade limit reached",
+
+        market,
+        balances,
+
+        stats: {
+          last24Hours:
+            stats24h,
+
+          allTime
+        }
+      });
+    }
+
+
+    // =========================
+    // DAILY LOSS LIMIT
+    // =========================
+
+    if (
+      !openTrade &&
+      stats24h.pnl <=
+        DAILY_MAX_LOSS_USDC
+    ) {
+      return res.status(200).json({
+        status: "paused",
+        decision: "HOLD",
+
+        reason:
+          "Daily loss limit reached",
+
+        market,
+        balances,
+
+        stats: {
+          last24Hours:
+            stats24h,
+
+          allTime
+        }
+      });
+    }
+
+
+    // ==================================================
+    // OPEN POSITION EXISTS
+    // ==================================================
+
+    if (openTrade) {
+      const positionState =
+        evaluateOpenPosition(
+          openTrade,
+          market
+        );
+
+      if (
+        !positionState.shouldSell
+      ) {
+        return res.status(200).json({
+          status: "ok",
+
+          decision: "HOLD",
+
+          reason:
+            positionState.reason,
+
+          market,
+
+          balances,
+
+          openPosition: {
+            ...openTrade,
+
+            currentPnlPct:
+              Number(
+                positionState
+                  .pnlPct
+                  .toFixed(3)
+              )
+          },
+
+          stats: {
+            last24Hours:
+              stats24h,
+
+            allTime
+          }
+        });
+      }
+
+
+      // =========================
+      // SELL OPEN POSITION
+      // =========================
+
+      const sellAmount =
+        Number(
+          openTrade.entry_sol
+        );
+
+      if (
+        !Number.isFinite(
+          sellAmount
+        ) ||
+        sellAmount <= 0
+      ) {
+        throw new Error(
+          "Invalid stored SOL amount"
+        );
+      }
+
+      const sellTrade = {
+        decision: "SELL",
+
+        confidence: 90,
+
+        amount:
+          sellAmount,
+
+        reason:
+          positionState.reason
+      };
+
+      const risk =
+        await callRiskAgent({
+          req,
+          trade:
+            sellTrade,
+          market,
+          balances
+        });
+
+      if (
+        risk.riskApproved !==
+        true
+      ) {
+        return res
+          .status(200)
+          .json({
+            status: "blocked",
+
+            decision: "SELL",
+
+            reason:
+              "Risk Agent blocked exit",
+
+            risk,
+
+            openPosition:
+              openTrade,
+
+            market,
+
+            balances
+          });
+      }
+
+      const execution =
+        await callExecutionAgent({
+          req,
+          walletAddress,
+
+          trade:
+            sellTrade,
+
+          risk
+        });
+
+      if (
+        execution.executed !==
+        true
+      ) {
+        throw new Error(
+          "SELL was not executed"
+        );
+      }
+
+      const receivedUsdc =
+        Number(
+          execution.quote
+            ?.outAmount || 0
+        ) /
+        1e6;
+
+      const closed =
+        await closePosition({
+          id:
+            openTrade.id,
+
+          exitPrice:
+            market.currentPrice,
+
+          exitUsdc:
+            receivedUsdc,
+
+          signature:
+            execution.signature
+        });
+
+      const updated24 =
+        await get24HourStats(
+          walletAddress
+        );
+
+      const updatedAll =
+        await getAllTimeStats(
+          walletAddress
+        );
+
+      return res.status(200).json({
+        status: "ok",
+
+        executed: true,
+
+        decision: "SELL",
+
+        exitReason:
+          positionState.reason,
+
+        execution,
+
+        closedPosition:
+          closed,
+
+        stats: {
+          last24Hours:
+            updated24,
+
+          allTime:
+            updatedAll
+        },
+
+        message:
+          "Position closed and PnL recorded"
+      });
+    }
+
+
+    // ==================================================
+    // NO OPEN POSITION
+    // LOOK FOR BUY
+    // ==================================================
+
     const trade =
-      makeDecision(
+      findEntrySignal(
         market,
         balances
       );
 
-    // =========================
-    // HOLD
-    // =========================
-
     if (
-      trade.decision === "HOLD"
+      trade.decision ===
+      "HOLD"
     ) {
       return res.status(200).json({
         status: "ok",
@@ -559,13 +928,18 @@ export default async function handler(
 
         balances,
 
-        message:
-          "No trade right now"
+        stats: {
+          last24Hours:
+            stats24h,
+
+          allTime
+        }
       });
     }
 
+
     // =========================
-    // RISK CHECK
+    // BUY RISK
     // =========================
 
     const risk =
@@ -577,21 +951,15 @@ export default async function handler(
       });
 
     if (
-      risk.riskApproved !== true
+      risk.riskApproved !==
+      true
     ) {
       return res.status(200).json({
         status: "blocked",
 
         executed: false,
 
-        decision:
-          trade.decision,
-
-        confidence:
-          trade.confidence,
-
-        reason:
-          trade.reason,
+        decision: "BUY",
 
         risk,
 
@@ -599,13 +967,18 @@ export default async function handler(
 
         balances,
 
-        message:
-          "Trade blocked by Risk Agent"
+        stats: {
+          last24Hours:
+            stats24h,
+
+          allTime
+        }
       });
     }
 
+
     // =========================
-    // PREPARE EXECUTION
+    // EXECUTE BUY
     // =========================
 
     const execution =
@@ -616,15 +989,60 @@ export default async function handler(
         risk
       });
 
-    // =========================
-    // RESPONSE
-    // =========================
+    if (
+      execution.executed !== true
+    ) {
+      throw new Error(
+        "BUY was not executed"
+      );
+    }
+
+    const spentUsdc =
+      Number(
+        execution.quote
+          ?.inAmount || 0
+      ) /
+      1e6;
+
+    const receivedSol =
+      Number(
+        execution.quote
+          ?.outAmount || 0
+      ) /
+      1e9;
+
+    if (
+      spentUsdc <= 0 ||
+      receivedSol <= 0
+    ) {
+      throw new Error(
+        "Invalid executed BUY amounts"
+      );
+    }
+
+    const position =
+      await openPosition({
+        walletAddress,
+
+        entryPrice:
+          market.currentPrice,
+
+        entrySol:
+          receivedSol,
+
+        entryUsdc:
+          spentUsdc,
+
+        signature:
+          execution.signature
+      });
 
     return res.status(200).json({
       status: "ok",
 
-      decision:
-        trade.decision,
+      executed: true,
+
+      decision: "BUY",
 
       confidence:
         trade.confidence,
@@ -632,19 +1050,20 @@ export default async function handler(
       reason:
         trade.reason,
 
-      market,
-
-      balances,
-
-      risk,
-
       execution,
 
+      openPosition:
+        position,
+
+      stats: {
+        last24Hours:
+          stats24h,
+
+        allTime
+      },
+
       message:
-        execution
-          ?.requiresWalletApproval
-          ? "Trade passed all agents and is ready for wallet approval"
-          : "Trade processed"
+        "New position opened and stored"
     });
 
   } catch (error) {
