@@ -1,1087 +1,1156 @@
-import * as tradingStore from "../lib/trading-store.js";
+// /api/trade-orchestrator.js
+// FAWAZ AI BOT
+// Parallel Micro Scalper v2
 
-const {
-  getOpenPosition,
-  openPosition,
-  closePosition,
-  get24HourStats,
-  getAllTimeStats
-} = tradingStore;
+import {
+  evaluateRisk,
+  getDynamicRiskMode,
+} from "./risk-agent.js";
+
+const SOL_MINT =
+  "So11111111111111111111111111111111111111112";
 
 const USDC_MINT =
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
-const RPC_URL =
-  "https://api.mainnet-beta.solana.com";
+// ======================================================
+// CONFIG
+// ======================================================
 
-// =========================
-// TRADING SETTINGS
-// =========================
+const CONFIG = {
+  maxSlots: 4,
 
-const BUY_USDC_AMOUNT = 5;
+  // نخلي 20% من رأس المال احتياطي
+  reservePct: 0.20,
 
-// أقصى عدد صفقات مغلقة خلال 24 ساعة
-const MAX_TRADES_24H = 20;
+  // أهداف الربح المتغيرة بالنقاط
+  calmTargetBps: 30,    // 0.30%
+  normalTargetBps: 45,  // 0.45%
+  fastTargetBps: 70,    // 0.70%
 
-// هدف الربح الأساسي
-const TAKE_PROFIT_PCT = 0.8;
+  // Trailing Profit
+  trailingActivationPct: 0.65,
+  trailingDistancePct: 0.30,
 
-// وقف الخسارة
-const STOP_LOSS_PCT = -0.5;
+  // وقف الخسارة
+  stopLossBps: 45, // 0.45%
 
-// حماية ربح صغير عند انعكاس السوق
-const PROTECT_PROFIT_PCT = 0.35;
+  // أقصى انزلاق
+  maxSlippageBps: 30, // 0.30%
 
-// إيقاف التداول إذا وصلت خسائر 24 ساعة لهذا الرقم
-const DAILY_MAX_LOSS_USDC = -1.5;
+  // الحد الأدنى للربح المتوقع بعد التكاليف
+  minNetEdgeBps: 12,
 
-// الحد الأدنى للدخول
-const MIN_ENTRY_MOMENTUM = 0.15;
+  // تأخير بسيط قبل إعادة استخدام نفس Slot
+  slotReentryDelayMs: 20_000,
+};
 
-// لا ندخل إذا السوق شبه ميت
-const MIN_VOLATILITY = 0.02;
+// ======================================================
+// STATE
+// ======================================================
 
+const globalState =
+  globalThis.__FAWAZ_SCALPER_STATE__ || {
+    totalCapitalUsd: 0,
 
-// =========================
-// MARKET DATA
-// =========================
+    slots: Array.from(
+      { length: CONFIG.maxSlots },
+      (_, index) => ({
+        id: index + 1,
+        status: "READY",
 
-async function getMarketData() {
-  const response = await fetch(
-    "https://www.okx.com/api/v5/market/candles?instId=SOL-USDC&bar=5m&limit=100"
-  );
+        entryPrice: null,
+        highestPrice: null,
 
-  const result = await response.json();
+        amountUsd: 0,
+        quantity: 0,
 
-  if (
-    !response.ok ||
-    result.code !== "0" ||
-    !Array.isArray(result.data) ||
-    result.data.length < 30
-  ) {
-    throw new Error(
-      "Failed to load OKX market candles"
-    );
+        targetBps: 0,
+
+        trailingActive: false,
+        trailingDistanceBps: 0,
+
+        openedAt: null,
+        closedAt: null,
+
+        lastUsedAt: 0,
+      })
+    ),
+
+    recentTrades: [],
+
+    prices: [],
+
+    cooldownUntil: 0,
+
+    stats: {
+      scanned: 0,
+      entries: 0,
+      exits: 0,
+      skipped: 0,
+    },
+  };
+
+globalThis.__FAWAZ_SCALPER_STATE__ = globalState;
+
+// ======================================================
+// HELPERS
+// ======================================================
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function percentageToBps(value) {
+  return value * 10000;
+}
+
+// ======================================================
+// AUTH
+// ======================================================
+
+function getAuthorization(req) {
+  const expected = process.env.AUTO_TRADER_SECRET;
+
+  if (!expected) {
+    return {
+      ok: false,
+      reason: "AUTO_TRADER_SECRET_MISSING",
+    };
   }
 
-  const closes = [...result.data]
-    .reverse()
-    .map((candle) => Number(candle[4]))
-    .filter(Number.isFinite);
+  const header =
+    req.headers.authorization ||
+    req.headers.Authorization;
 
-  if (closes.length < 30) {
-    throw new Error(
-      "Not enough valid market candles"
-    );
+  if (header !== `Bearer ${expected}`) {
+    return {
+      ok: false,
+      reason: "UNAUTHORIZED",
+    };
   }
 
-  const currentPrice =
-    closes[closes.length - 1];
+  return {
+    ok: true,
+  };
+}
 
-  const previousPrice =
-    closes[closes.length - 6];
+// ======================================================
+// MARKET PRICE
+// ======================================================
 
-  if (
-    !Number.isFinite(currentPrice) ||
-    !Number.isFinite(previousPrice) ||
-    previousPrice <= 0
-  ) {
-    throw new Error(
-      "Invalid market prices"
+async function getMarketPrice(req) {
+  /*
+    الخيار الأول:
+    إذا عندك API خاص بالسعر نحطه في:
+
+    MARKET_PRICE_ENDPOINT
+  */
+
+  if (process.env.MARKET_PRICE_ENDPOINT) {
+    const response = await fetch(
+      process.env.MARKET_PRICE_ENDPOINT,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      }
     );
-  }
 
-  const sma10 =
-    closes
-      .slice(-10)
-      .reduce((a, b) => a + b, 0) / 10;
-
-  const sma30 =
-    closes
-      .slice(-30)
-      .reduce((a, b) => a + b, 0) / 30;
-
-  const momentum =
-    ((currentPrice - previousPrice) /
-      previousPrice) *
-    100;
-
-  const recentCloses =
-    closes.slice(-12);
-
-  const changes = [];
-
-  for (
-    let i = 1;
-    i < recentCloses.length;
-    i++
-  ) {
-    const previous =
-      recentCloses[i - 1];
-
-    const current =
-      recentCloses[i];
-
-    if (previous > 0) {
-      changes.push(
-        Math.abs(
-          ((current - previous) /
-            previous) *
-            100
-        )
+    if (!response.ok) {
+      throw new Error(
+        `MARKET_PRICE_HTTP_${response.status}`
       );
     }
+
+    const data = await response.json();
+
+    const price =
+      Number(data.price) ||
+      Number(data.solPrice) ||
+      Number(data.data?.price);
+
+    if (!price || price <= 0) {
+      throw new Error("INVALID_MARKET_PRICE");
+    }
+
+    return price;
   }
 
-  const volatility =
-    changes.length
-      ? changes.reduce(
-          (a, b) => a + b,
+  /*
+    للاختبار فقط:
+
+    /api/trade-orchestrator?price=200
+  */
+
+  const queryPrice = Number(req.query?.price);
+
+  if (queryPrice > 0) {
+    return queryPrice;
+  }
+
+  throw new Error(
+    "MARKET_PRICE_ENDPOINT_NOT_CONFIGURED"
+  );
+}
+
+// ======================================================
+// PRICE MEMORY
+// ======================================================
+
+function pushPrice(price) {
+  globalState.prices.push({
+    price,
+    time: Date.now(),
+  });
+
+  if (globalState.prices.length > 60) {
+    globalState.prices =
+      globalState.prices.slice(-60);
+  }
+}
+
+// ======================================================
+// MARKET METRICS
+// ======================================================
+
+function calculateMarketMetrics() {
+  const prices =
+    globalState.prices.map((item) => item.price);
+
+  if (prices.length < 2) {
+    return {
+      momentumBps: 0,
+      volatilityBps: 0,
+      shortMoveBps: 0,
+      direction: "FLAT",
+    };
+  }
+
+  const current =
+    prices[prices.length - 1];
+
+  const previous =
+    prices[prices.length - 2];
+
+  const lookback =
+    prices[Math.max(0, prices.length - 6)];
+
+  const shortMoveBps =
+    percentageToBps(
+      (current - previous) / previous
+    );
+
+  const momentumBps =
+    percentageToBps(
+      (current - lookback) / lookback
+    );
+
+  const returns = [];
+
+  for (let i = 1; i < prices.length; i++) {
+    const move =
+      percentageToBps(
+        (prices[i] - prices[i - 1]) /
+          prices[i - 1]
+      );
+
+    returns.push(Math.abs(move));
+  }
+
+  const volatilityBps =
+    returns.length > 0
+      ? returns.reduce(
+          (sum, move) => sum + move,
           0
-        ) / changes.length
+        ) / returns.length
       : 0;
 
+  let direction = "FLAT";
+
+  if (momentumBps > 5) {
+    direction = "UP";
+  }
+
+  if (momentumBps < -5) {
+    direction = "DOWN";
+  }
+
   return {
-    currentPrice:
-      Number(currentPrice.toFixed(6)),
-
-    sma10:
-      Number(sma10.toFixed(6)),
-
-    sma30:
-      Number(sma30.toFixed(6)),
-
-    momentum:
-      Number(momentum.toFixed(3)),
-
-    volatility:
-      Number(volatility.toFixed(3))
+    momentumBps,
+    volatilityBps,
+    shortMoveBps,
+    direction,
   };
 }
 
+// ======================================================
+// DYNAMIC TARGET
+// ======================================================
 
-// =========================
-// SOL BALANCE
-// =========================
+function getDynamicTarget(metrics, mode) {
+  let target = CONFIG.calmTargetBps;
 
-async function getSolBalance(
-  walletAddress
-) {
-  const response = await fetch(
-    RPC_URL,
-    {
-      method: "POST",
+  if (metrics.volatilityBps >= 25) {
+    target = CONFIG.normalTargetBps;
+  }
 
-      headers: {
-        "Content-Type":
-          "application/json"
-      },
+  if (metrics.volatilityBps >= 50) {
+    target = CONFIG.fastTargetBps;
+  }
 
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "getBalance",
-        params: [walletAddress]
-      })
-    }
+  if (mode === "FAST") {
+    target *= 1.10;
+  }
+
+  if (mode === "DEFENSIVE") {
+    target *= 0.80;
+  }
+
+  return Math.round(
+    clamp(target, 20, 100)
   );
-
-  const result =
-    await response.json();
-
-  const lamports =
-    result?.result?.value;
-
-  if (!Number.isFinite(lamports)) {
-    throw new Error(
-      "Failed to load SOL balance"
-    );
-  }
-
-  return lamports / 1e9;
 }
 
+// ======================================================
+// SLOTS
+// ======================================================
 
-// =========================
-// USDC BALANCE
-// =========================
+function getReadySlot() {
+  const now = Date.now();
 
-async function getUsdcBalance(
-  walletAddress
-) {
-  const response = await fetch(
-    RPC_URL,
-    {
-      method: "POST",
-
-      headers: {
-        "Content-Type":
-          "application/json"
-      },
-
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 2,
-
-        method:
-          "getTokenAccountsByOwner",
-
-        params: [
-          walletAddress,
-
-          {
-            mint: USDC_MINT
-          },
-
-          {
-            encoding: "jsonParsed"
-          }
-        ]
-      })
-    }
+  return globalState.slots.find(
+    (slot) =>
+      slot.status === "READY" &&
+      now - Number(slot.lastUsedAt || 0) >=
+        CONFIG.slotReentryDelayMs
   );
-
-  const result =
-    await response.json();
-
-  const accounts =
-    result?.result?.value || [];
-
-  let total = 0;
-
-  for (const account of accounts) {
-    const amount =
-      account?.account?.data?.parsed
-        ?.info?.tokenAmount?.uiAmount;
-
-    if (Number.isFinite(amount)) {
-      total += amount;
-    }
-  }
-
-  return total;
 }
 
-
-// =========================
-// INTERNAL API URL
-// =========================
-
-function buildApiUrl(
-  req,
-  path
-) {
-  const host =
-    req.headers.host;
-
-  if (!host) {
-    throw new Error(
-      "Host missing"
-    );
-  }
-
-  const protocol =
-    host.includes("localhost")
-      ? "http"
-      : "https";
-
-  return `${protocol}://${host}${path}`;
+function getOpenSlots() {
+  return globalState.slots.filter(
+    (slot) => slot.status === "OPEN"
+  );
 }
 
+function calculateSlotAmount() {
+  const usableCapital =
+    globalState.totalCapitalUsd *
+    (1 - CONFIG.reservePct);
 
-// =========================
-// RISK AGENT
-// =========================
+  return usableCapital / CONFIG.maxSlots;
+}
 
-async function callRiskAgent({
-  req,
-  trade,
-  market,
-  balances
+// ======================================================
+// ENTRY DETECTOR
+// ======================================================
+
+function detectEntryOpportunity({
+  price,
+  metrics,
+  mode,
 }) {
-  const response =
-    await fetch(
-      buildApiUrl(
-        req,
-        "/api/risk-agent"
-      ),
-      {
-        method: "POST",
+  /*
+    طريقتين للدخول:
 
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
+    1) Momentum Scalping
+    السعر بدأ يتحرك للأعلى
 
-        body: JSON.stringify({
-          decision:
-            trade.decision,
+    2) Dip Layer
+    هبوط صغير نحاول نصيد ارتداده
+  */
 
-          confidence:
-            trade.confidence,
+  const momentumEntry =
+    metrics.shortMoveBps >= 4 &&
+    metrics.momentumBps >= 3;
 
-          amount:
-            trade.amount,
+  const dipEntry =
+    metrics.shortMoveBps <= -8 &&
+    Math.abs(metrics.shortMoveBps) <= 80;
 
-          solBalance:
-            balances.solBalance,
+  const volatilityOk =
+    metrics.volatilityBps >= 3;
 
-          usdcBalance:
-            balances.usdcBalance,
+  if (!volatilityOk) {
+    return {
+      enter: false,
+      reason: "VOLATILITY_TOO_LOW",
+    };
+  }
 
-          momentum:
-            market.momentum,
+  if (!momentumEntry && !dipEntry) {
+    return {
+      enter: false,
+      reason: "NO_MICRO_SETUP",
+    };
+  }
 
-          volatility:
-            market.volatility
-        })
-      }
-    );
+  return {
+    enter: true,
 
-  const data =
-    await response.json();
+    type:
+      dipEntry
+        ? "DIP_LAYER"
+        : "MOMENTUM_SCALP",
+
+    estimatedMoveBps:
+      getDynamicTarget(metrics, mode),
+
+    price,
+  };
+}
+
+// ======================================================
+// EXECUTION
+// ======================================================
+
+async function executeTrade({
+  side,
+  amountUsd,
+  slotId,
+  maxSlippageBps,
+}) {
+  /*
+    هذا يرسل أمر التنفيذ إلى ملف التداول الموجود عندك.
+
+    ضع الرابط في Vercel باسم:
+
+    TRADE_EXECUTION_ENDPOINT
+
+    مثال:
+
+    https://fawaz-ai-bot.vercel.app/api/execute-trade
+  */
+
+  const endpoint =
+    process.env.TRADE_EXECUTION_ENDPOINT;
+
+  if (!endpoint) {
+    return {
+      success: false,
+      simulated: true,
+      reason:
+        "TRADE_EXECUTION_ENDPOINT_NOT_SET",
+    };
+  }
+
+  const secret =
+    process.env.AUTO_TRADER_SECRET;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${secret}`,
+    },
+
+    body: JSON.stringify({
+      side,
+      slotId,
+      amountUsd,
+
+      inputMint:
+        side === "BUY"
+          ? USDC_MINT
+          : SOL_MINT,
+
+      outputMint:
+        side === "BUY"
+          ? SOL_MINT
+          : USDC_MINT,
+
+      slippageBps:
+        maxSlippageBps,
+    }),
+  });
+
+  const text = await response.text();
+
+  let data;
+
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = {
+      raw: text,
+    };
+  }
 
   if (!response.ok) {
-    throw new Error(
-      data?.message ||
-      "Risk Agent failed"
-    );
+    return {
+      success: false,
+      status: response.status,
+      data,
+    };
   }
 
-  return data;
+  return {
+    success: true,
+    data,
+  };
 }
 
+// ======================================================
+// OPEN SLOT
+// ======================================================
 
-// =========================
-// EXECUTION AGENT
-// =========================
-
-async function callExecutionAgent({
-  req,
-  walletAddress,
-  trade,
-  risk
+async function openSlot({
+  slot,
+  price,
+  amountUsd,
+  targetBps,
 }) {
-  const response =
-    await fetch(
-      buildApiUrl(
-        req,
-        "/api/execution-agent"
-      ),
-      {
-        method: "POST",
+  const execution =
+    await executeTrade({
+      side: "BUY",
 
-        headers: {
-          "Content-Type":
-            "application/json"
-        },
+      amountUsd,
 
-        body: JSON.stringify({
-          decision:
-            trade.decision,
+      slotId: slot.id,
 
-          confidence:
-            trade.confidence,
+      maxSlippageBps:
+        CONFIG.maxSlippageBps,
+    });
 
-          riskApproved:
-            risk.riskApproved === true,
+  if (!execution.success) {
+    return {
+      opened: false,
+      execution,
+    };
+  }
 
-          amount:
-            trade.amount,
+  const quantity =
+    amountUsd / price;
 
-          walletAddress
-        })
+  slot.status = "OPEN";
+
+  slot.entryPrice = price;
+
+  slot.highestPrice = price;
+
+  slot.amountUsd = amountUsd;
+
+  slot.quantity = quantity;
+
+  slot.targetBps = targetBps;
+
+  slot.trailingActive = false;
+
+  slot.trailingDistanceBps =
+    Math.max(
+      8,
+      Math.round(
+        targetBps *
+          CONFIG.trailingDistancePct
+      )
+    );
+
+  slot.openedAt = Date.now();
+
+  slot.lastUsedAt = Date.now();
+
+  globalState.stats.entries++;
+
+  return {
+    opened: true,
+    slot,
+    execution,
+  };
+}
+
+// ======================================================
+// CLOSE SLOT
+// ======================================================
+
+async function closeSlot(
+  slot,
+  currentPrice,
+  reason
+) {
+  const execution =
+    await executeTrade({
+      side: "SELL",
+
+      amountUsd: slot.amountUsd,
+
+      slotId: slot.id,
+
+      maxSlippageBps:
+        CONFIG.maxSlippageBps,
+    });
+
+  if (!execution.success) {
+    return {
+      closed: false,
+      execution,
+    };
+  }
+
+  const pnlBps =
+    percentageToBps(
+      (currentPrice -
+        slot.entryPrice) /
+        slot.entryPrice
+    );
+
+  const trade = {
+    slotId: slot.id,
+
+    entryPrice:
+      slot.entryPrice,
+
+    exitPrice:
+      currentPrice,
+
+    pnlBps,
+
+    reason,
+
+    openedAt:
+      slot.openedAt,
+
+    closedAt:
+      Date.now(),
+  };
+
+  globalState.recentTrades.push(trade);
+
+  if (
+    globalState.recentTrades.length > 50
+  ) {
+    globalState.recentTrades =
+      globalState.recentTrades.slice(-50);
+  }
+
+  slot.status = "READY";
+
+  slot.entryPrice = null;
+
+  slot.highestPrice = null;
+
+  slot.amountUsd = 0;
+
+  slot.quantity = 0;
+
+  slot.targetBps = 0;
+
+  slot.trailingActive = false;
+
+  slot.trailingDistanceBps = 0;
+
+  slot.openedAt = null;
+
+  slot.closedAt = Date.now();
+
+  slot.lastUsedAt = Date.now();
+
+  globalState.stats.exits++;
+
+  return {
+    closed: true,
+    pnlBps,
+    trade,
+    execution,
+  };
+}
+
+// ======================================================
+// MANAGE ALL OPEN SLOTS
+// ======================================================
+
+async function manageOpenSlots(price) {
+  const events = [];
+
+  const slots =
+    getOpenSlots();
+
+  /*
+    كل Slot يتم تقييمه بشكل مستقل.
+    ما ننتظر صفقة تخلص عشان ندير الثانية.
+  */
+
+  for (const slot of slots) {
+    if (
+      !slot.entryPrice ||
+      slot.entryPrice <= 0
+    ) {
+      continue;
+    }
+
+    if (
+      !slot.highestPrice ||
+      price > slot.highestPrice
+    ) {
+      slot.highestPrice = price;
+    }
+
+    const pnlBps =
+      percentageToBps(
+        (price -
+          slot.entryPrice) /
+          slot.entryPrice
+      );
+
+    const activationBps =
+      slot.targetBps *
+      CONFIG.trailingActivationPct;
+
+    // تفعيل Trailing
+    if (
+      !slot.trailingActive &&
+      pnlBps >= activationBps
+    ) {
+      slot.trailingActive = true;
+
+      events.push({
+        slotId: slot.id,
+        event:
+          "TRAILING_ACTIVATED",
+        pnlBps,
+      });
+    }
+
+    // STOP LOSS
+    if (
+      pnlBps <=
+      -CONFIG.stopLossBps
+    ) {
+      const close =
+        await closeSlot(
+          slot,
+          price,
+          "STOP_LOSS"
+        );
+
+      events.push({
+        slotId: slot.id,
+        event: "STOP_LOSS",
+        ...close,
+      });
+
+      continue;
+    }
+
+    // TRAILING PROFIT
+    if (slot.trailingActive) {
+      const dropFromHighBps =
+        percentageToBps(
+          (slot.highestPrice -
+            price) /
+            slot.highestPrice
+        );
+
+      if (
+        dropFromHighBps >=
+        slot.trailingDistanceBps
+      ) {
+        const close =
+          await closeSlot(
+            slot,
+            price,
+            "TRAILING_PROFIT"
+          );
+
+        events.push({
+          slotId: slot.id,
+          event:
+            "TRAILING_EXIT",
+          ...close,
+        });
+
+        continue;
       }
-    );
+    }
 
-  const data =
-    await response.json();
+    // خروج إجباري إذا امتدت الحركة كثيرًا
+    if (
+      pnlBps >=
+      slot.targetBps * 1.35
+    ) {
+      const close =
+        await closeSlot(
+          slot,
+          price,
+          "TARGET_EXIT"
+        );
 
-  if (!response.ok) {
-    throw new Error(
-      data?.message ||
-      "Execution Agent failed"
-    );
+      events.push({
+        slotId: slot.id,
+        event:
+          "TARGET_EXIT",
+        ...close,
+      });
+    }
   }
 
-  return data;
+  return events;
 }
 
+// ======================================================
+// SEARCH FOR NEW POSITION
+// ======================================================
 
-// =========================
-// ENTRY DECISION
-// =========================
+async function searchForEntry({
+  price,
+  metrics,
+  mode,
+}) {
+  const slot =
+    getReadySlot();
 
-function findEntrySignal(
-  market,
-  balances
-) {
-  if (
-    balances.usdcBalance <
-    BUY_USDC_AMOUNT
-  ) {
+  if (!slot) {
     return {
-      decision: "HOLD",
-      confidence: 0,
-      amount: 0,
+      skipped: true,
       reason:
-        "Not enough USDC for 5 USDC trade"
+        "ALL_SLOTS_BUSY",
     };
   }
 
-  const bullishTrend =
-    market.sma10 >
-    market.sma30;
+  const opportunity =
+    detectEntryOpportunity({
+      price,
+      metrics,
+      mode,
+    });
 
-  const strongMomentum =
-    market.momentum >
-    MIN_ENTRY_MOMENTUM;
-
-  const enoughMovement =
-    market.volatility >=
-    MIN_VOLATILITY;
-
-  if (
-    bullishTrend &&
-    strongMomentum &&
-    enoughMovement
-  ) {
-    const confidence =
-      market.momentum > 0.35
-        ? 85
-        : 75;
+  if (!opportunity.enter) {
+    globalState.stats.skipped++;
 
     return {
-      decision: "BUY",
-      confidence,
-      amount:
-        BUY_USDC_AMOUNT,
-
+      skipped: true,
       reason:
-        "Bullish short-term trend with usable volatility"
+        opportunity.reason,
     };
   }
+
+  const amountUsd =
+    calculateSlotAmount();
+
+  const candidate = {
+    amountUsd,
+
+    expectedMoveBps:
+      opportunity.estimatedMoveBps,
+
+    /*
+      مؤقتًا تقدير للانزلاق.
+      الأفضل لاحقًا نجيبه من Quote الحقيقي.
+    */
+    estimatedSlippageBps: 8,
+
+    buyFeeBps: 0,
+
+    sellFeeBps: 0,
+  };
+
+  const risk =
+    evaluateRisk({
+      state:
+        globalState,
+
+      candidate,
+
+      config: {
+        maxOpenSlots:
+          CONFIG.maxSlots,
+
+        maxSlippageBps:
+          CONFIG.maxSlippageBps,
+
+        minNetEdgeBps:
+          CONFIG.minNetEdgeBps,
+      },
+    });
+
+  if (!risk.allowed) {
+    globalState.stats.skipped++;
+
+    if (
+      risk.reason ===
+      "LOSS_STREAK"
+    ) {
+      globalState.cooldownUntil =
+        Date.now() +
+        Number(
+          risk.cooldownMs ||
+            300000
+        );
+    }
+
+    return {
+      skipped: true,
+      opportunity,
+      risk,
+    };
+  }
+
+  const opened =
+    await openSlot({
+      slot,
+      price,
+      amountUsd,
+
+      targetBps:
+        opportunity.estimatedMoveBps,
+    });
 
   return {
-    decision: "HOLD",
-    confidence: 60,
-    amount: 0,
-    reason:
-      "No strong scalping entry"
+    opportunity,
+    risk,
+    opened,
   };
 }
 
-
-// =========================
-// OPEN POSITION LOGIC
-// =========================
-
-function evaluateOpenPosition(
-  position,
-  market
-) {
-  const entryPrice =
-    Number(
-      position.entry_price
-    );
-
-  if (
-    !Number.isFinite(entryPrice) ||
-    entryPrice <= 0
-  ) {
-    throw new Error(
-      "Invalid stored entry price"
-    );
-  }
-
-  const pnlPct =
-    (
-      (
-        market.currentPrice -
-        entryPrice
-      ) /
-      entryPrice
-    ) *
-    100;
-
-  // =========================
-  // TAKE PROFIT
-  // =========================
-
-  if (
-    pnlPct >=
-    TAKE_PROFIT_PCT
-  ) {
-    return {
-      shouldSell: true,
-      reason:
-        "TAKE_PROFIT",
-      pnlPct
-    };
-  }
-
-  // =========================
-  // STOP LOSS
-  // =========================
-
-  if (
-    pnlPct <=
-    STOP_LOSS_PCT
-  ) {
-    return {
-      shouldSell: true,
-      reason:
-        "STOP_LOSS",
-      pnlPct
-    };
-  }
-
-  // =========================
-  // PROTECT SMALL PROFIT
-  // =========================
-
-  const momentumTurningDown =
-    market.momentum <= 0;
-
-  const trendTurningDown =
-    market.sma10 <
-    market.sma30;
-
-  if (
-    pnlPct >=
-      PROTECT_PROFIT_PCT &&
-    (
-      momentumTurningDown ||
-      trendTurningDown
-    )
-  ) {
-    return {
-      shouldSell: true,
-      reason:
-        "PROTECT_SMALL_PROFIT",
-      pnlPct
-    };
-  }
-
-  return {
-    shouldSell: false,
-    reason:
-      "KEEP_POSITION_OPEN",
-    pnlPct
-  };
-}
-
-
-// =========================
-// MAIN
-// =========================
+// ======================================================
+// MAIN HANDLER
+// ======================================================
 
 export default async function handler(
   req,
   res
 ) {
-  if (req.method !== "POST") {
-    return res.status(405).json({
-      status: "error",
-      message: "POST only"
-    });
-  }
-
   try {
-    const {
-      walletAddress
-    } = req.body || {};
+    // ---------------------------------------------
+    // AUTH
+    // ---------------------------------------------
 
-    if (
-      !walletAddress ||
-      typeof walletAddress !==
-        "string" ||
-      walletAddress.length < 30
-    ) {
-      return res.status(400).json({
-        status: "error",
-        message:
-          "Valid walletAddress required"
-      });
-    }
+    const auth =
+      getAuthorization(req);
 
-    // =========================
-    // LOAD DATA
-    // =========================
-
-    const [
-      market,
-      solBalance,
-      usdcBalance,
-      openTrade,
-      stats24h,
-      allTime
-    ] = await Promise.all([
-      getMarketData(),
-
-      getSolBalance(
-        walletAddress
-      ),
-
-      getUsdcBalance(
-        walletAddress
-      ),
-
-      getOpenPosition(
-        walletAddress
-      ),
-
-      get24HourStats(
-        walletAddress
-      ),
-
-      getAllTimeStats(
-        walletAddress
-      )
-    ]);
-
-    const balances = {
-      solBalance,
-      usdcBalance
-    };
-
-
-    // =========================
-    // DAILY TRADE LIMIT
-    // =========================
-
-    if (
-      !openTrade &&
-      stats24h.trades >=
-        MAX_TRADES_24H
-    ) {
-      return res.status(200).json({
-        status: "paused",
-        decision: "HOLD",
-
-        reason:
-          "24 hour trade limit reached",
-
-        market,
-        balances,
-
-        stats: {
-          last24Hours:
-            stats24h,
-
-          allTime
-        }
-      });
-    }
-
-
-    // =========================
-    // DAILY LOSS LIMIT
-    // =========================
-
-    if (
-      !openTrade &&
-      stats24h.pnl <=
-        DAILY_MAX_LOSS_USDC
-    ) {
-      return res.status(200).json({
-        status: "paused",
-        decision: "HOLD",
-
-        reason:
-          "Daily loss limit reached",
-
-        market,
-        balances,
-
-        stats: {
-          last24Hours:
-            stats24h,
-
-          allTime
-        }
-      });
-    }
-
-
-    // ==================================================
-    // OPEN POSITION EXISTS
-    // ==================================================
-
-    if (openTrade) {
-      const positionState =
-        evaluateOpenPosition(
-          openTrade,
-          market
-        );
-
-      if (
-        !positionState.shouldSell
-      ) {
-        return res.status(200).json({
-          status: "ok",
-
-          decision: "HOLD",
-
-          reason:
-            positionState.reason,
-
-          market,
-
-          balances,
-
-          openPosition: {
-            ...openTrade,
-
-            currentPnlPct:
-              Number(
-                positionState
-                  .pnlPct
-                  .toFixed(3)
-              )
-          },
-
-          stats: {
-            last24Hours:
-              stats24h,
-
-            allTime
-          }
+    if (!auth.ok) {
+      return res
+        .status(
+          auth.reason ===
+            "UNAUTHORIZED"
+            ? 401
+            : 500
+        )
+        .json({
+          ok: false,
+          error: auth.reason,
         });
-      }
+    }
 
+    globalState.stats.scanned++;
 
-      // =========================
-      // SELL OPEN POSITION
-      // =========================
+    // ---------------------------------------------
+    // CAPITAL
+    // ---------------------------------------------
 
-      const sellAmount =
-        Number(
-          openTrade.entry_sol
-        );
+    const configuredCapital =
+      Number(
+        process.env
+          .SCALPER_CAPITAL_USD
+      );
 
-      if (
-        !Number.isFinite(
-          sellAmount
-        ) ||
-        sellAmount <= 0
-      ) {
-        throw new Error(
-          "Invalid stored SOL amount"
-        );
-      }
+    if (
+      configuredCapital > 0
+    ) {
+      globalState.totalCapitalUsd =
+        configuredCapital;
+    }
 
-      const sellTrade = {
-        decision: "SELL",
+    if (
+      globalState.totalCapitalUsd <= 0
+    ) {
+      return res
+        .status(400)
+        .json({
+          ok: false,
 
-        confidence: 90,
+          error:
+            "SCALPER_CAPITAL_USD_NOT_SET",
 
-        amount:
-          sellAmount,
+          message:
+            "ضع SCALPER_CAPITAL_USD في Environment Variables.",
+        });
+    }
 
+    // ---------------------------------------------
+    // PRICE
+    // ---------------------------------------------
+
+    const price =
+      await getMarketPrice(req);
+
+    pushPrice(price);
+
+    // ---------------------------------------------
+    // ANALYSIS
+    // ---------------------------------------------
+
+    const metrics =
+      calculateMarketMetrics();
+
+    const mode =
+      getDynamicRiskMode(
+        globalState.recentTrades
+      );
+
+    // ---------------------------------------------
+    // MANAGE EXISTING TRADES
+    // ---------------------------------------------
+
+    const positionEvents =
+      await manageOpenSlots(price);
+
+    // ---------------------------------------------
+    // SEARCH FOR NEW TRADE
+    // ---------------------------------------------
+
+    let entryEvent = null;
+
+    if (mode === "PAUSED") {
+      entryEvent = {
+        skipped: true,
         reason:
-          positionState.reason
+          "PERFORMANCE_PAUSED",
       };
+    } else if (
+      globalState.cooldownUntil &&
+      Date.now() <
+        globalState.cooldownUntil
+    ) {
+      entryEvent = {
+        skipped: true,
+        reason: "COOLDOWN",
+        cooldownUntil:
+          globalState.cooldownUntil,
+      };
+    } else {
+      /*
+        مهم جدًا:
+        بعد إدارة الصفقات المفتوحة
+        نبحث فورًا عن فرصة جديدة.
 
-      const risk =
-        await callRiskAgent({
-          req,
-          trade:
-            sellTrade,
-          market,
-          balances
+        لو فيه Slot فاضي يدخل،
+        حتى لو Slots ثانية ما زالت مفتوحة.
+      */
+
+      entryEvent =
+        await searchForEntry({
+          price,
+          metrics,
+          mode,
         });
+    }
 
-      if (
-        risk.riskApproved !==
-        true
-      ) {
-        return res
-          .status(200)
-          .json({
-            status: "blocked",
+    // ---------------------------------------------
+    // RESPONSE
+    // ---------------------------------------------
 
-            decision: "SELL",
+    const openSlots =
+      getOpenSlots();
 
-            reason:
-              "Risk Agent blocked exit",
+    const readySlots =
+      globalState.slots.filter(
+        (slot) =>
+          slot.status === "READY"
+      );
 
-            risk,
+    return res
+      .status(200)
+      .json({
+        ok: true,
 
-            openPosition:
-              openTrade,
+        engine:
+          "FAWAZ_PARALLEL_MICRO_SCALPER_V2",
 
-            market,
+        mode,
 
-            balances
-          });
-      }
+        market: {
+          symbol:
+            "SOL/USDC",
 
-      const execution =
-        await callExecutionAgent({
-          req,
-          walletAddress,
+          price,
 
-          trade:
-            sellTrade,
+          momentumBps:
+            Number(
+              metrics.momentumBps.toFixed(
+                2
+              )
+            ),
 
-          risk
-        });
+          volatilityBps:
+            Number(
+              metrics.volatilityBps.toFixed(
+                2
+              )
+            ),
 
-      if (
-        execution.executed !==
-        true
-      ) {
-        throw new Error(
-          "SELL was not executed"
-        );
-      }
+          shortMoveBps:
+            Number(
+              metrics.shortMoveBps.toFixed(
+                2
+              )
+            ),
 
-      const receivedUsdc =
-        Number(
-          execution.quote
-            ?.outAmount || 0
-        ) /
-        1e6;
-
-      const closed =
-        await closePosition({
-          id:
-            openTrade.id,
-
-          exitPrice:
-            market.currentPrice,
-
-          exitUsdc:
-            receivedUsdc,
-
-          signature:
-            execution.signature
-        });
-
-      const updated24 =
-        await get24HourStats(
-          walletAddress
-        );
-
-      const updatedAll =
-        await getAllTimeStats(
-          walletAddress
-        );
-
-      return res.status(200).json({
-        status: "ok",
-
-        executed: true,
-
-        decision: "SELL",
-
-        exitReason:
-          positionState.reason,
-
-        execution,
-
-        closedPosition:
-          closed,
-
-        stats: {
-          last24Hours:
-            updated24,
-
-          allTime:
-            updatedAll
+          direction:
+            metrics.direction,
         },
 
-        message:
-          "Position closed and PnL recorded"
+        capital: {
+          totalUsd:
+            globalState.totalCapitalUsd,
+
+          reservePct:
+            CONFIG.reservePct,
+
+          slotAmountUsd:
+            calculateSlotAmount(),
+        },
+
+        slotsSummary: {
+          total:
+            CONFIG.maxSlots,
+
+          open:
+            openSlots.length,
+
+          ready:
+            readySlots.length,
+        },
+
+        slots:
+          globalState.slots,
+
+        positionEvents,
+
+        entryEvent,
+
+        recentTrades:
+          globalState.recentTrades.slice(
+            -10
+          ),
+
+        stats:
+          globalState.stats,
+
+        timestamp:
+          new Date().toISOString(),
       });
-    }
-
-
-    // ==================================================
-    // NO OPEN POSITION
-    // LOOK FOR BUY
-    // ==================================================
-
-    const trade =
-      findEntrySignal(
-        market,
-        balances
-      );
-
-    if (
-      trade.decision ===
-      "HOLD"
-    ) {
-      return res.status(200).json({
-        status: "ok",
-
-        executed: false,
-
-        decision: "HOLD",
-
-        confidence:
-          trade.confidence,
-
-        reason:
-          trade.reason,
-
-        market,
-
-        balances,
-
-        stats: {
-          last24Hours:
-            stats24h,
-
-          allTime
-        }
-      });
-    }
-
-
-    // =========================
-    // BUY RISK
-    // =========================
-
-    const risk =
-      await callRiskAgent({
-        req,
-        trade,
-        market,
-        balances
-      });
-
-    if (
-      risk.riskApproved !==
-      true
-    ) {
-      return res.status(200).json({
-        status: "blocked",
-
-        executed: false,
-
-        decision: "BUY",
-
-        risk,
-
-        market,
-
-        balances,
-
-        stats: {
-          last24Hours:
-            stats24h,
-
-          allTime
-        }
-      });
-    }
-
-
-    // =========================
-    // EXECUTE BUY
-    // =========================
-
-    const execution =
-      await callExecutionAgent({
-        req,
-        walletAddress,
-        trade,
-        risk
-      });
-
-    if (
-      execution.executed !== true
-    ) {
-      throw new Error(
-        "BUY was not executed"
-      );
-    }
-
-    const spentUsdc =
-      Number(
-        execution.quote
-          ?.inAmount || 0
-      ) /
-      1e6;
-
-    const receivedSol =
-      Number(
-        execution.quote
-          ?.outAmount || 0
-      ) /
-      1e9;
-
-    if (
-      spentUsdc <= 0 ||
-      receivedSol <= 0
-    ) {
-      throw new Error(
-        "Invalid executed BUY amounts"
-      );
-    }
-
-    const position =
-      await openPosition({
-        walletAddress,
-
-        entryPrice:
-          market.currentPrice,
-
-        entrySol:
-          receivedSol,
-
-        entryUsdc:
-          spentUsdc,
-
-        signature:
-          execution.signature
-      });
-
-    return res.status(200).json({
-      status: "ok",
-
-      executed: true,
-
-      decision: "BUY",
-
-      confidence:
-        trade.confidence,
-
-      reason:
-        trade.reason,
-
-      execution,
-
-      openPosition:
-        position,
-
-      stats: {
-        last24Hours:
-          stats24h,
-
-        allTime
-      },
-
-      message:
-        "New position opened and stored"
-    });
-
   } catch (error) {
     console.error(
-      "Trade Orchestrator Error:",
+      "TRADE_ORCHESTRATOR_ERROR",
       error
     );
 
-    return res.status(500).json({
-      status: "error",
+    return res
+      .status(500)
+      .json({
+        ok: false,
 
-      executed: false,
+        engine:
+          "FAWAZ_PARALLEL_MICRO_SCALPER_V2",
 
-      message:
-        error?.message ||
-        "Trade orchestrator failed"
-    });
+        error:
+          error?.message ||
+          "UNKNOWN_ERROR",
+
+        timestamp:
+          new Date().toISOString(),
+      });
   }
 }
