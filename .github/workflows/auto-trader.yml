@@ -17,8 +17,11 @@ jobs:
   trade:
     runs-on: ubuntu-latest
 
+    # يمنع أي Job عالق لفترة طويلة
+    timeout-minutes: 6
+
     steps:
-      - name: Run full auto trading cycle
+      - name: Run fast trading cycles
         env:
           AUTO_TRADER_SECRET: ${{ secrets.AUTO_TRADER_SECRET }}
 
@@ -26,64 +29,74 @@ jobs:
           set -euo pipefail
 
           BASE_URL="https://fawaz-ai-bot.vercel.app"
+          ENDPOINT="$BASE_URL/api/trade-orchestrator"
 
-          echo "Starting FAWAZ FULL AUTO trading cycle..."
+          echo "======================================"
+          echo "FAWAZ AI TRADER - FAST POST ENGINE"
+          echo "======================================"
 
-          RESPONSE=$(curl \
-            --silent \
-            --show-error \
-            --fail-with-body \
-            --connect-timeout 15 \
-            --max-time 50 \
-            --retry 2 \
-            --request POST \
-            -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json" \
-            --data '{}' \
-            "$BASE_URL/api/trade-orchestrator")
+          # 14 دورة × 20 ثانية
+          # تقريباً 4 دقائق و40 ثانية
+          # ثم GitHub يبدأ التشغيل المجدول التالي
+          TOTAL_CYCLES=14
+          DELAY_SECONDS=20
 
-          echo "$RESPONSE" | jq .
+          for i in $(seq 1 $TOTAL_CYCLES); do
 
-          ENGINE=$(echo "$RESPONSE" | jq -r '.engine // "-"')
-          STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
-          EXECUTION=$(echo "$RESPONSE" | jq -r '.execution // "-"')
-          EXECUTED=$(echo "$RESPONSE" | jq -r '.executed // false')
+            echo ""
+            echo "======================================"
+            echo "Trading cycle $i / $TOTAL_CYCLES"
+            echo "======================================"
 
-          echo "================================="
-          echo "Engine: $ENGINE"
-          echo "Status: $STATUS"
-          echo "Execution: $EXECUTION"
-          echo "Executed: $EXECUTED"
-          echo "================================="
+            RESPONSE=$(curl \
+              --silent \
+              --show-error \
+              --fail-with-body \
+              --connect-timeout 15 \
+              --max-time 50 \
+              --retry 2 \
+              --retry-delay 2 \
+              -X POST \
+              -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+              -H "Content-Type: application/json" \
+              -H "Accept: application/json" \
+              "$ENDPOINT" \
+              || true)
 
-          if [ "$STATUS" = "error" ]; then
-            MESSAGE=$(echo "$RESPONSE" | jq -r '.message // "Unknown trading error"')
-            echo "Trading cycle error: $MESSAGE"
-            exit 1
-          fi
+            echo "$RESPONSE"
 
-          if [ "$EXECUTED" = "true" ]; then
+            # نعرض أهم نتيجة بشكل واضح إذا jq متوفر
+            if echo "$RESPONSE" | jq . >/dev/null 2>&1; then
 
-            SIDE=$(echo "$RESPONSE" | jq -r '.result.side // "-"')
-            SLOT=$(echo "$RESPONSE" | jq -r '.result.slotId // "-"')
-            SIGNATURE=$(echo "$RESPONSE" | jq -r '.result.signature // "-"')
+              STATUS=$(echo "$RESPONSE" | jq -r '.status // "-"')
+              EXECUTED=$(echo "$RESPONSE" | jq -r '.executed // false')
+              SIDE=$(echo "$RESPONSE" | jq -r '.result.side // "-"')
+              REASON=$(echo "$RESPONSE" | jq -r '.result.reason // .reason // "-"')
+              ENGINE=$(echo "$RESPONSE" | jq -r '.engine // "-"')
 
-            echo "================================="
-            echo "REAL TRADE EXECUTED"
-            echo "Side: $SIDE"
-            echo "Slot: $SLOT"
-            echo "Signature: $SIGNATURE"
-            echo "================================="
+              echo ""
+              echo "Engine:   $ENGINE"
+              echo "Status:   $STATUS"
+              echo "Executed: $EXECUTED"
+              echo "Side:     $SIDE"
+              echo "Reason:   $REASON"
 
-          else
+            else
 
-            ACTION=$(echo "$RESPONSE" | jq -r '.signal.action // "WAIT"')
-            REASON=$(echo "$RESPONSE" | jq -r '.reason // .signal.reason // "Waiting for approved setup"')
+              echo "Warning: API returned non-JSON response."
 
-            echo "No trade executed this cycle."
-            echo "Signal: $ACTION"
-            echo "Reason: $REASON"
-          fi
+            fi
 
-          echo "Trading cycle completed successfully."
+            # آخر دورة لا تحتاج انتظار
+            if [ "$i" -lt "$TOTAL_CYCLES" ]; then
+              echo ""
+              echo "Waiting ${DELAY_SECONDS}s..."
+              sleep "$DELAY_SECONDS"
+            fi
+
+          done
+
+          echo ""
+          echo "======================================"
+          echo "FAST TRADING SESSION FINISHED"
+          echo "======================================"
