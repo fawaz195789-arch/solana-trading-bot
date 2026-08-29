@@ -3,7 +3,6 @@ name: SOL Auto Trader
 on:
   schedule:
     - cron: "*/5 * * * *"
-
   workflow_dispatch:
 
 permissions:
