@@ -1,6 +1,7 @@
 // /api/execution-agent.js
 // FAWAZ AI BOT
-// Execution Agent v3
+// Execution Agent v4
+// Real Jupiter Swap Execution
 // Compatible with Parallel Micro Scalper Slots
 
 import {
@@ -11,6 +12,11 @@ import {
 
 import bs58 from "bs58";
 
+
+// ======================================================
+// TOKEN MINTS
+// ======================================================
+
 const SOL_MINT =
   "So11111111111111111111111111111111111111112";
 
@@ -20,9 +26,19 @@ const USDC_MINT =
 const SOL_DECIMALS = 9;
 const USDC_DECIMALS = 6;
 
+
+// ======================================================
+// RPC
+// ======================================================
+
 const RPC_URL =
   process.env.SOLANA_RPC_URL ||
   "https://api.mainnet-beta.solana.com";
+
+
+// ======================================================
+// JUPITER
+// ======================================================
 
 const JUPITER_QUOTE_URL =
   "https://api.jup.ag/swap/v1/quote";
@@ -30,7 +46,15 @@ const JUPITER_QUOTE_URL =
 const JUPITER_SWAP_URL =
   "https://api.jup.ag/swap/v1/swap";
 
+
+// ======================================================
+// SAFETY
+// ======================================================
+
 const ABSOLUTE_MAX_SLIPPAGE_BPS = 30;
+
+const MAX_PRICE_IMPACT_PCT = 0.003;
+
 
 // ======================================================
 // JUPITER HEADERS
@@ -49,6 +73,7 @@ function jupiterHeaders() {
 
   return headers;
 }
+
 
 // ======================================================
 // AUTHORIZATION
@@ -69,7 +94,8 @@ function authorize(req) {
 
   const auth =
     req.headers.authorization ||
-    req.headers.Authorization;
+    req.headers.Authorization ||
+    "";
 
   if (
     auth !==
@@ -78,7 +104,8 @@ function authorize(req) {
     return {
       ok: false,
       status: 401,
-      reason: "UNAUTHORIZED"
+      reason:
+        "UNAUTHORIZED"
     };
   }
 
@@ -87,9 +114,12 @@ function authorize(req) {
   };
 }
 
+
 // ======================================================
 // PRIVATE KEY
-// Supports Base58 or JSON Array
+// Supports:
+// 1) Base58
+// 2) JSON array
 // ======================================================
 
 function loadBotKeypair() {
@@ -99,7 +129,7 @@ function loadBotKeypair() {
 
   if (!raw) {
     throw new Error(
-      "BOT_SOLANA_PRIVATE_KEY is missing"
+      "BOT_SOLANA_PRIVATE_KEY_MISSING"
     );
   }
 
@@ -107,6 +137,10 @@ function loadBotKeypair() {
     raw.trim();
 
   try {
+    // ----------------------------------
+    // JSON ARRAY
+    // ----------------------------------
+
     if (
       value.startsWith("[") &&
       value.endsWith("]")
@@ -118,7 +152,7 @@ function loadBotKeypair() {
         !Array.isArray(parsed)
       ) {
         throw new Error(
-          "Private key JSON is not an array"
+          "PRIVATE_KEY_JSON_NOT_ARRAY"
         );
       }
 
@@ -130,18 +164,71 @@ function loadBotKeypair() {
       );
     }
 
+    // ----------------------------------
+    // BASE58
+    // ----------------------------------
+
     const secret =
       bs58.decode(value);
 
     return Keypair.fromSecretKey(
       secret
     );
+
   } catch {
     throw new Error(
-      "Invalid BOT_SOLANA_PRIVATE_KEY format"
+      "INVALID_BOT_SOLANA_PRIVATE_KEY_FORMAT"
     );
   }
 }
+
+
+// ======================================================
+// CONFIGURED WALLET
+// ======================================================
+
+function getConfiguredWalletAddress() {
+  const wallet =
+    process.env.BOT_PUBLIC_WALLET ||
+    process.env.BOT_WALLET_ADDRESS ||
+    process.env.SOLANA_WALLET_ADDRESS ||
+    process.env.WALLET_ADDRESS ||
+    null;
+
+  if (!wallet) {
+    return null;
+  }
+
+  return wallet.trim();
+}
+
+
+// ======================================================
+// WALLET SAFETY CHECK
+// ======================================================
+
+function verifyWalletMatchesKeypair(
+  keypair
+) {
+  const botAddress =
+    keypair.publicKey
+      .toString();
+
+  const configuredWallet =
+    getConfiguredWalletAddress();
+
+  if (
+    configuredWallet &&
+    configuredWallet !== botAddress
+  ) {
+    throw new Error(
+      "BOT_WALLET_ADDRESS_DOES_NOT_MATCH_PRIVATE_KEY"
+    );
+  }
+
+  return botAddress;
+}
+
 
 // ======================================================
 // AMOUNT
@@ -159,18 +246,19 @@ function toAtomicAmount(
     numeric <= 0
   ) {
     throw new Error(
-      "Invalid trade amount"
+      "INVALID_TRADE_AMOUNT"
     );
   }
 
   return Math.floor(
     numeric *
-      Math.pow(
-        10,
-        decimals
-      )
+    Math.pow(
+      10,
+      decimals
+    )
   ).toString();
 }
+
 
 // ======================================================
 // SAFE NUMBER
@@ -192,16 +280,19 @@ function safeNumber(
   return number;
 }
 
+
 // ======================================================
-// GET REQUEST FORMAT
+// PARSE TRADE REQUEST
 // ======================================================
 
-function parseTradeRequest(body = {}) {
+function parseTradeRequest(
+  body = {}
+) {
   const side =
     String(
       body.side ||
-        body.decision ||
-        ""
+      body.decision ||
+      ""
     ).toUpperCase();
 
   const slotId =
@@ -222,7 +313,7 @@ function parseTradeRequest(body = {}) {
   const amountSol =
     safeNumber(
       body.amountSol ??
-        body.quantity,
+      body.quantity,
       side === "SELL"
         ? safeNumber(
             body.amount,
@@ -257,8 +348,9 @@ function parseTradeRequest(body = {}) {
   };
 }
 
+
 // ======================================================
-// QUOTE
+// GET JUPITER QUOTE
 // ======================================================
 
 async function getJupiterQuote({
@@ -317,8 +409,9 @@ async function getJupiterQuote({
   return data;
 }
 
+
 // ======================================================
-// BUILD SWAP
+// BUILD JUPITER SWAP
 // ======================================================
 
 async function buildSwap({
@@ -389,41 +482,69 @@ async function buildSwap({
   return data;
 }
 
+
 // ======================================================
-// MAIN
+// MAIN HANDLER
 // ======================================================
 
 export default async function handler(
   req,
   res
 ) {
+
+  // ==================================================
+  // POST ONLY
+  // ==================================================
+
   if (
     req.method !== "POST"
   ) {
     return res
       .status(405)
       .json({
-        status: "error",
-        executed: false,
-        message: "POST only"
+        status:
+          "error",
+
+        executed:
+          false,
+
+        message:
+          "POST only"
       });
   }
+
+
+  // ==================================================
+  // AUTH
+  // ==================================================
 
   const auth =
     authorize(req);
 
   if (!auth.ok) {
     return res
-      .status(auth.status)
+      .status(
+        auth.status
+      )
       .json({
-        status: "error",
-        executed: false,
+        status:
+          "error",
+
+        executed:
+          false,
+
         reason:
           auth.reason
       });
   }
 
+
   try {
+
+    // ==================================================
+    // PARSE REQUEST
+    // ==================================================
+
     const trade =
       parseTradeRequest(
         req.body || {}
@@ -437,6 +558,11 @@ export default async function handler(
       slippageBps
     } = trade;
 
+
+    // ==================================================
+    // HOLD / WAIT
+    // ==================================================
+
     if (
       side === "HOLD" ||
       side === "WAIT"
@@ -444,14 +570,26 @@ export default async function handler(
       return res
         .status(200)
         .json({
-          status: "ok",
-          executed: false,
-          decision: "HOLD",
+          status:
+            "ok",
+
+          executed:
+            false,
+
+          decision:
+            "HOLD",
+
           slotId,
+
           message:
             "No trade requested"
         });
     }
+
+
+    // ==================================================
+    // VALID SIDE
+    // ==================================================
 
     if (
       side !== "BUY" &&
@@ -460,25 +598,47 @@ export default async function handler(
       return res
         .status(400)
         .json({
-          status: "error",
-          executed: false,
+          status:
+            "error",
+
+          executed:
+            false,
+
           slotId,
+
           message:
             "Invalid trade side"
         });
     }
 
+
+    // ==================================================
+    // LOAD KEYPAIR
+    // ==================================================
+
     const keypair =
       loadBotKeypair();
 
+
+    // ==================================================
+    // VERIFY WALLET ADDRESS
+    // ==================================================
+
     const botAddress =
-      keypair.publicKey
-        .toString();
+      verifyWalletMatchesKeypair(
+        keypair
+      );
+
+
+    // ==================================================
+    // DEFINE SWAP
+    // ==================================================
 
     let inputMint;
     let outputMint;
     let atomicAmount;
     let humanAmount;
+
 
     // ==================================================
     // BUY SOL WITH USDC
@@ -487,6 +647,7 @@ export default async function handler(
     if (
       side === "BUY"
     ) {
+
       if (
         !Number.isFinite(
           amountUsd
@@ -509,6 +670,7 @@ export default async function handler(
           });
       }
 
+
       inputMint =
         USDC_MINT;
 
@@ -525,6 +687,7 @@ export default async function handler(
         );
     }
 
+
     // ==================================================
     // SELL SOL FOR USDC
     // ==================================================
@@ -532,6 +695,7 @@ export default async function handler(
     if (
       side === "SELL"
     ) {
+
       if (
         !Number.isFinite(
           amountSol
@@ -557,6 +721,7 @@ export default async function handler(
           });
       }
 
+
       inputMint =
         SOL_MINT;
 
@@ -573,6 +738,7 @@ export default async function handler(
         );
     }
 
+
     // ==================================================
     // GET QUOTE
     // ==================================================
@@ -585,8 +751,9 @@ export default async function handler(
         slippageBps
       });
 
+
     // ==================================================
-    // PRICE IMPACT PROTECTION
+    // PRICE IMPACT SAFETY
     // ==================================================
 
     const priceImpactPct =
@@ -595,10 +762,12 @@ export default async function handler(
         0
       );
 
+
     if (
       Math.abs(
         priceImpactPct
-      ) > 0.003
+      ) >
+      MAX_PRICE_IMPACT_PCT
     ) {
       return res
         .status(200)
@@ -616,9 +785,13 @@ export default async function handler(
 
           priceImpactPct,
 
+          maxPriceImpactPct:
+            MAX_PRICE_IMPACT_PCT,
+
           slippageBps
         });
     }
+
 
     // ==================================================
     // BUILD SWAP
@@ -631,8 +804,9 @@ export default async function handler(
           botAddress
       });
 
+
     // ==================================================
-    // DESERIALIZE
+    // DESERIALIZE TRANSACTION
     // ==================================================
 
     const transactionBuffer =
@@ -642,22 +816,25 @@ export default async function handler(
         "base64"
       );
 
+
     const transaction =
       VersionedTransaction
         .deserialize(
           transactionBuffer
         );
 
+
     // ==================================================
-    // SIGN
+    // SIGN TRANSACTION
     // ==================================================
 
     transaction.sign([
       keypair
     ]);
 
+
     // ==================================================
-    // CONNECTION
+    // SOLANA CONNECTION
     // ==================================================
 
     const connection =
@@ -666,8 +843,9 @@ export default async function handler(
         "confirmed"
       );
 
+
     // ==================================================
-    // SEND
+    // SEND TRANSACTION
     // ==================================================
 
     const signature =
@@ -684,14 +862,16 @@ export default async function handler(
           }
         );
 
+
     // ==================================================
-    // CONFIRM
+    // CONFIRM TRANSACTION
     // ==================================================
 
     if (
       swapData
         .lastValidBlockHeight
     ) {
+
       await connection
         .confirmTransaction(
           {
@@ -709,13 +889,16 @@ export default async function handler(
 
           "confirmed"
         );
+
     } else {
+
       await connection
         .confirmTransaction(
           signature,
           "confirmed"
         );
     }
+
 
     // ==================================================
     // SUCCESS
@@ -724,14 +907,17 @@ export default async function handler(
     return res
       .status(200)
       .json({
-        status: "ok",
+        status:
+          "ok",
 
-        executed: true,
+        executed:
+          true,
 
-        automatic: true,
+        automatic:
+          true,
 
         engine:
-          "FAWAZ_EXECUTION_AGENT_V3",
+          "FAWAZ_EXECUTION_AGENT_V4",
 
         slotId,
 
@@ -780,21 +966,26 @@ export default async function handler(
           "Trade signed and executed automatically"
       });
 
+
   } catch (error) {
+
     console.error(
       "Execution Agent Error:",
       error
     );
 
+
     return res
       .status(500)
       .json({
-        status: "error",
+        status:
+          "error",
 
-        executed: false,
+        executed:
+          false,
 
         engine:
-          "FAWAZ_EXECUTION_AGENT_V3",
+          "FAWAZ_EXECUTION_AGENT_V4",
 
         message:
           error?.message ||
