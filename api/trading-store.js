@@ -1070,3 +1070,26 @@ export async function getTradingDashboard(
 // ======================================================
 
 export async function markPositionForReconciliation({
+  id,
+  reason = "ON_CHAIN_BALANCE_MISMATCH"
+}) {
+  await ensureTradingTables();
+
+  const sql = db();
+
+  const rows =
+    await sql`
+      UPDATE bot_positions
+
+      SET
+        status = 'RECONCILE',
+        close_reason = ${reason}
+
+      WHERE id = ${Number(id)}
+        AND status = 'OPEN'
+
+      RETURNING *
+    `;
+
+  return rows[0] || null;
+}
