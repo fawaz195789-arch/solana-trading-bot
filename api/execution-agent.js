@@ -1,12 +1,14 @@
 // /api/execution-agent.js
 // FAWAZ AI BOT
-// Execution Agent v6
+// Execution Agent v6.1
 //
 // GET  = Wallet connection + real SOL/USDC balances
 // POST = Real Jupiter Swap Execution
 //
-// IMPORTANT:
-// Real transactions are signed by BOT_SOLANA_PRIVATE_KEY
+// CHANGE IN v6.1:
+// - Verify REAL on-chain SOL before SELL
+// - Prevent SELL amount > real SOL balance
+// - Keep existing trading/Jupiter behavior unchanged
 
 import {
   Connection,
@@ -67,17 +69,25 @@ const MAX_PRICE_IMPACT_PCT = 0.003;
 // ======================================================
 
 function jupiterHeaders() {
+
   const headers = {
-    "Content-Type": "application/json",
-    Accept: "application/json"
+
+    "Content-Type":
+      "application/json",
+
+    Accept:
+      "application/json"
   };
+
 
   if (
     process.env.JUPITER_API_KEY
   ) {
+
     headers["x-api-key"] =
       process.env.JUPITER_API_KEY;
   }
+
 
   return headers;
 }
@@ -87,35 +97,50 @@ function jupiterHeaders() {
 // AUTHORIZATION
 // ======================================================
 
-function authorize(req) {
+function authorize(
+  req
+) {
+
   const expected =
     process.env.AUTO_TRADER_SECRET;
 
+
   if (!expected) {
+
     return {
+
       ok: false,
+
       status: 500,
+
       reason:
         "AUTO_TRADER_SECRET_MISSING"
     };
   }
+
 
   const auth =
     req.headers.authorization ||
     req.headers.Authorization ||
     "";
 
+
   if (
     auth !==
     `Bearer ${expected}`
   ) {
+
     return {
+
       ok: false,
+
       status: 401,
+
       reason:
         "UNAUTHORIZED"
     };
   }
+
 
   return {
     ok: true
@@ -128,17 +153,23 @@ function authorize(req) {
 // ======================================================
 
 function loadBotKeypair() {
+
   const raw =
-    process.env.BOT_SOLANA_PRIVATE_KEY;
+    process.env
+      .BOT_SOLANA_PRIVATE_KEY;
+
 
   if (!raw) {
+
     throw new Error(
       "BOT_SOLANA_PRIVATE_KEY_MISSING"
     );
   }
 
+
   const value =
     raw.trim();
+
 
   try {
 
@@ -150,32 +181,42 @@ function loadBotKeypair() {
       const parsed =
         JSON.parse(value);
 
+
       if (
         !Array.isArray(parsed)
       ) {
+
         throw new Error(
           "PRIVATE_KEY_JSON_NOT_ARRAY"
         );
       }
+
 
       const secret =
         Uint8Array.from(
           parsed
         );
 
-      return Keypair.fromSecretKey(
-        secret
-      );
+
+      return Keypair
+        .fromSecretKey(
+          secret
+        );
     }
+
 
     const secret =
       bs58.decode(value);
 
-    return Keypair.fromSecretKey(
-      secret
-    );
+
+    return Keypair
+      .fromSecretKey(
+        secret
+      );
+
 
   } catch {
+
     throw new Error(
       "INVALID_BOT_SOLANA_PRIVATE_KEY_FORMAT"
     );
@@ -188,12 +229,14 @@ function loadBotKeypair() {
 // ======================================================
 
 function getConfiguredWalletAddress() {
+
   const wallet =
     process.env.BOT_PUBLIC_WALLET ||
     process.env.BOT_WALLET_ADDRESS ||
     process.env.SOLANA_WALLET_ADDRESS ||
     process.env.WALLET_ADDRESS ||
     null;
+
 
   return wallet
     ? wallet.trim()
@@ -210,19 +253,25 @@ function verifyWalletMatchesKeypair(
 ) {
 
   const botAddress =
-    keypair.publicKey.toString();
+    keypair.publicKey
+      .toString();
+
 
   const configuredWallet =
     getConfiguredWalletAddress();
 
+
   if (
     configuredWallet &&
-    configuredWallet !== botAddress
+    configuredWallet !==
+      botAddress
   ) {
+
     throw new Error(
       "BOT_WALLET_ADDRESS_DOES_NOT_MATCH_PRIVATE_KEY"
     );
   }
+
 
   return botAddress;
 }
@@ -240,9 +289,36 @@ function safeNumber(
   const number =
     Number(value);
 
+
   return Number.isFinite(number)
     ? number
     : fallback;
+}
+
+
+// ======================================================
+// REAL SOL BALANCE
+// ======================================================
+
+async function getRealSolBalance(
+  connection,
+  ownerPublicKey
+) {
+
+  const lamports =
+    await connection.getBalance(
+      ownerPublicKey,
+      "confirmed"
+    );
+
+
+  return (
+    lamports /
+    Math.pow(
+      10,
+      SOL_DECIMALS
+    )
+  );
 }
 
 
@@ -260,6 +336,7 @@ async function getRealUsdcBalance(
       USDC_MINT
     );
 
+
   const tokenAccounts =
     await connection
       .getParsedTokenAccountsByOwner(
@@ -270,7 +347,9 @@ async function getRealUsdcBalance(
         "confirmed"
       );
 
+
   let totalUsdc = 0;
+
 
   for (
     const item
@@ -285,19 +364,24 @@ async function getRealUsdcBalance(
         ?.info
         ?.tokenAmount;
 
+
     if (!tokenAmount) {
+
       continue;
     }
+
 
     const amount =
       Number(
         tokenAmount.amount
       );
 
+
     const decimals =
       Number(
         tokenAmount.decimals
       );
+
 
     if (
       Number.isFinite(amount) &&
@@ -313,14 +397,13 @@ async function getRealUsdcBalance(
     }
   }
 
+
   return totalUsdc;
 }
 
 
 // ======================================================
 // WALLET TEST
-// REAL SOL + USDC
-// NO TRADE
 // ======================================================
 
 async function handleWalletTest(
@@ -333,12 +416,15 @@ async function handleWalletTest(
     const keypair =
       loadBotKeypair();
 
+
     const derivedAddress =
       keypair.publicKey
         .toString();
 
+
     const configuredWallet =
       getConfiguredWalletAddress();
+
 
     const walletMatch =
       !configuredWallet ||
@@ -392,12 +478,13 @@ async function handleWalletTest(
 
 
     const [
-      balanceLamports,
+      solBalance,
       usdcBalance
     ] =
       await Promise.all([
 
-        connection.getBalance(
+        getRealSolBalance(
+          connection,
           keypair.publicKey
         ),
 
@@ -407,14 +494,6 @@ async function handleWalletTest(
         )
 
       ]);
-
-
-    const solBalance =
-      balanceLamports /
-      Math.pow(
-        10,
-        SOL_DECIMALS
-      );
 
 
     return res
@@ -453,24 +532,28 @@ async function handleWalletTest(
 
         solBalance:
           Number(
-            solBalance.toFixed(9)
+            solBalance
+              .toFixed(9)
           ),
 
         usdcBalance:
           Number(
-            usdcBalance.toFixed(6)
+            usdcBalance
+              .toFixed(6)
           ),
 
         balances: {
 
           sol:
             Number(
-              solBalance.toFixed(9)
+              solBalance
+                .toFixed(9)
             ),
 
           usdc:
             Number(
-              usdcBalance.toFixed(6)
+              usdcBalance
+                .toFixed(6)
             )
         },
 
@@ -543,14 +626,17 @@ function toAtomicAmount(
   const numeric =
     Number(amount);
 
+
   if (
     !Number.isFinite(numeric) ||
     numeric <= 0
   ) {
+
     throw new Error(
       "INVALID_TRADE_AMOUNT"
     );
   }
+
 
   return Math.floor(
     numeric *
@@ -632,10 +718,15 @@ function parseTradeRequest(
 
 
   return {
+
     side,
+
     slotId,
+
     amountUsd,
+
     amountSol,
+
     slippageBps
   };
 }
@@ -682,6 +773,7 @@ async function getJupiterQuote({
     await fetch(
       `${JUPITER_QUOTE_URL}?${params.toString()}`,
       {
+
         method:
           "GET",
 
@@ -697,6 +789,7 @@ async function getJupiterQuote({
 
   let data;
 
+
   try {
 
     data =
@@ -705,7 +798,8 @@ async function getJupiterQuote({
   } catch {
 
     data = {
-      raw: text
+      raw:
+        text
     };
   }
 
@@ -753,6 +847,7 @@ async function buildSwap({
     await fetch(
       JUPITER_SWAP_URL,
       {
+
         method:
           "POST",
 
@@ -799,6 +894,7 @@ async function buildSwap({
 
   let data;
 
+
   try {
 
     data =
@@ -807,7 +903,8 @@ async function buildSwap({
   } catch {
 
     data = {
-      raw: text
+      raw:
+        text
     };
   }
 
@@ -839,7 +936,7 @@ export default async function handler(
 ) {
 
   // ==================================================
-  // GET = WALLET TEST
+  // GET
   // ==================================================
 
   if (
@@ -848,7 +945,7 @@ export default async function handler(
 
     if (
       req.query?.test ===
-      "wallet"
+        "wallet"
     ) {
 
       return handleWalletTest(
@@ -866,7 +963,7 @@ export default async function handler(
           "ok",
 
         engine:
-          "FAWAZ_EXECUTION_AGENT_V6",
+          "FAWAZ_EXECUTION_AGENT_V6_1",
 
         executed:
           false,
@@ -878,7 +975,7 @@ export default async function handler(
 
 
   // ==================================================
-  // POST ONLY FOR REAL TRADING
+  // POST ONLY
   // ==================================================
 
   if (
@@ -1019,6 +1116,14 @@ export default async function handler(
       );
 
 
+    // One connection for this execution
+    const connection =
+      new Connection(
+        RPC_URL,
+        "confirmed"
+      );
+
+
     let inputMint;
     let outputMint;
     let atomicAmount;
@@ -1111,324 +1216,62 @@ export default async function handler(
       }
 
 
-      inputMint =
-        SOL_MINT;
+      // ----------------------------------------------
+      // REAL ON-CHAIN SOL GUARD
+      // ----------------------------------------------
 
-      outputMint =
-        USDC_MINT;
-
-      humanAmount =
-        amountSol;
-
-      atomicAmount =
-        toAtomicAmount(
-          amountSol,
-          SOL_DECIMALS
+      const realSolBalance =
+        await getRealSolBalance(
+          connection,
+          keypair.publicKey
         );
-    }
-
-
-    // ==================================================
-    // GET QUOTE
-    // ==================================================
-
-    const quote =
-      await getJupiterQuote({
-
-        inputMint,
-
-        outputMint,
-
-        atomicAmount,
-
-        slippageBps
-      });
-
-
-    // ==================================================
-    // PRICE IMPACT
-    // ==================================================
-
-    const priceImpactPct =
-      safeNumber(
-        quote.priceImpactPct,
-        0
-      );
-
-
-    if (
-      Math.abs(
-        priceImpactPct
-      ) >
-      MAX_PRICE_IMPACT_PCT
-    ) {
-
-      return res
-        .status(200)
-        .json({
-
-          status:
-            "blocked",
-
-          executed:
-            false,
-
-          slotId,
-
-          reason:
-            "PRICE_IMPACT_TOO_HIGH",
-
-          priceImpactPct,
-
-          maxPriceImpactPct:
-            MAX_PRICE_IMPACT_PCT,
-
-          slippageBps
-        });
-    }
-
-
-    // ==================================================
-    // BUILD SWAP
-    // ==================================================
-
-    const swapData =
-      await buildSwap({
-
-        quote,
-
-        walletAddress:
-          botAddress
-      });
-
-
-    // ==================================================
-    // DESERIALIZE
-    // ==================================================
-
-    const transactionBuffer =
-      Buffer.from(
-        swapData.swapTransaction,
-        "base64"
-      );
-
-
-    const transaction =
-      VersionedTransaction
-        .deserialize(
-          transactionBuffer
-        );
-
-
-    // ==================================================
-    // SIGN
-    // ==================================================
-
-    transaction.sign([
-      keypair
-    ]);
-
-
-    // ==================================================
-    // CONNECTION
-    // ==================================================
-
-    const connection =
-      new Connection(
-        RPC_URL,
-        "confirmed"
-      );
-
-
-    // ==================================================
-    // SEND
-    // ==================================================
-
-    let signature;
-
-
-    try {
-
-      signature =
-        await connection
-          .sendRawTransaction(
-            transaction.serialize(),
-            {
-              skipPreflight:
-                false,
-
-              maxRetries:
-                3
-            }
-          );
-
-    } catch (sendError) {
-
-      console.error(
-        "SOLANA SEND ERROR:",
-        sendError
-      );
 
 
       if (
-        Array.isArray(
-          sendError
-            ?.transactionLogs
-        )
+        amountSol >
+        realSolBalance
       ) {
 
-        console.error(
-          "SOLANA TRANSACTION LOGS:",
-          sendError
-            .transactionLogs
-        );
-      }
+        return res
+          .status(200)
+          .json({
 
+            status:
+              "blocked",
 
-      throw sendError;
-    }
+            executed:
+              false,
 
+            engine:
+              "FAWAZ_EXECUTION_AGENT_V6_1",
 
-    // ==================================================
-    // CONFIRM
-    // ==================================================
+            slotId,
 
-    if (
-      swapData
-        .lastValidBlockHeight
-    ) {
+            side:
+              "SELL",
 
-      await connection
-        .confirmTransaction(
-          {
+            reason:
+              "INSUFFICIENT_REAL_SOL_FOR_SELL",
 
-            signature,
+            requestedSol:
+              Number(
+                amountSol
+                  .toFixed(9)
+              ),
 
-            blockhash:
-              transaction
-                .message
-                .recentBlockhash,
+            realSolBalance:
+              Number(
+                realSolBalance
+                  .toFixed(9)
+              ),
 
-            lastValidBlockHeight:
-              swapData
-                .lastValidBlockHeight
-          },
+            differenceSol:
+              Number(
+                (
+                  amountSol -
+                  realSolBalance
+                ).toFixed(9)
+              ),
 
-          "confirmed"
-        );
-
-    } else {
-
-      await connection
-        .confirmTransaction(
-          signature,
-          "confirmed"
-        );
-    }
-
-
-    // ==================================================
-    // SUCCESS
-    // ==================================================
-
-    return res
-      .status(200)
-      .json({
-
-        status:
-          "ok",
-
-        executed:
-          true,
-
-        automatic:
-          true,
-
-        engine:
-          "FAWAZ_EXECUTION_AGENT_V6",
-
-        slotId,
-
-        side,
-
-        amount:
-          humanAmount,
-
-        amountType:
-          side === "BUY"
-            ? "USDC"
-            : "SOL",
-
-        walletAddress:
-          botAddress,
-
-        signature,
-
-        quote: {
-
-          inputMint,
-
-          outputMint,
-
-          inAmount:
-            quote.inAmount,
-
-          outAmount:
-            quote.outAmount,
-
-          priceImpactPct:
-            quote.priceImpactPct ??
-            null,
-
-          slippageBps,
-
-          routeCount:
-            Array.isArray(
-              quote.routePlan
-            )
-              ? quote
-                  .routePlan
-                  .length
-              : 0
-        },
-
-        timestamp:
-          new Date()
-            .toISOString(),
-
-        message:
-          "Trade signed and executed automatically"
-      });
-
-
-  } catch (error) {
-
-    console.error(
-      "Execution Agent Error:",
-      error
-    );
-
-
-    return res
-      .status(500)
-      .json({
-
-        status:
-          "error",
-
-        executed:
-          false,
-
-        engine:
-          "FAWAZ_EXECUTION_AGENT_V6",
-
-        message:
-          error?.message ||
-          "Execution Agent failed",
-
-        timestamp:
-          new Date()
-            .toISOString()
-      });
-  }
-}
+            message:
+              "Recorded position SOL exceeds real on-chain
