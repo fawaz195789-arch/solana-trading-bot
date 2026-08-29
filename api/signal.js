@@ -1,12 +1,66 @@
 // /api/signal.js
 // FAWAZ AI BOT
-// Signal Agent v4
+// Signal Agent v5
+//
+// AGGRESSIVE MICRO DIP / REBOUND ENGINE
 //
 // الهدف:
-// التقاط micro-swings بشكل أسرع
-// مع توحيد قرار Market + Signal
+// - التقاط النزلات القصيرة بسرعة
+// - الدخول عند بداية الارتداد
+// - الاستفادة من دفتر الأوامر
+// - تجنب السبريد المكلف
+// - إعطاء فرص أكثر من V4
 //
-// هذا الملف لا ينفذ أي صفقة مالية.
+// IMPORTANT:
+// هذا الملف يحلل فقط.
+// لا يوقع ولا يرسل أي صفقة مالية.
+
+import {
+  randomUUID
+} from "crypto";
+
+
+// ======================================================
+// STRATEGY
+// ======================================================
+
+const CONFIG = {
+
+  // أقصى Spread نسمح به
+  hardMaxSpreadBps: 12,
+
+  // Spread مفضل للدخول
+  preferredSpreadBps: 6,
+
+  // أقل حركة سوق مفيدة
+  minVolatilityBps: 0.8,
+
+  // أقل مدى قصير مفيد
+  minMicroRangeBps: 3,
+
+  // بداية اعتبار الحركة نزلة
+  dipStartBps: -1.5,
+
+  // نزلة قوية نسبيًا
+  strongDipBps: -5,
+
+  // لا نحاول اصطياد انهيار قوي
+  maxDipBps: -35,
+
+  // دفتر أوامر داعم
+  positiveImbalance: 0.03,
+
+  strongPositiveImbalance: 0.15,
+
+  // مستوى BUY أصبح أخف من V4
+  normalBuyScore: 48,
+
+  // نزلة واضحة تسمح بدخول أسرع
+  dipBuyScore: 43,
+
+  // أقل ثقة نهائية
+  minimumBuyConfidence: 43
+};
 
 
 // ======================================================
@@ -14,10 +68,15 @@
 // ======================================================
 
 function getBaseUrl(req) {
-  if (process.env.APP_BASE_URL) {
-    return process.env.APP_BASE_URL
+
+  if (
+    process.env.APP_BASE_URL
+  ) {
+    return process.env
+      .APP_BASE_URL
       .replace(/\/$/, "");
   }
+
 
   if (
     process.env
@@ -30,26 +89,40 @@ function getBaseUrl(req) {
     );
   }
 
-  if (process.env.VERCEL_URL) {
+
+  if (
+    process.env.VERCEL_URL
+  ) {
     return (
       "https://" +
       process.env.VERCEL_URL
     );
   }
 
+
   const host =
     req.headers.host;
 
+
   if (host) {
+
     const protocol =
-      host.includes("localhost")
+      host.includes(
+        "localhost"
+      )
         ? "http"
         : "https";
 
-    return `${protocol}://${host}`;
+
+    return (
+      `${protocol}://${host}`
+    );
   }
 
-  return "https://fawaz-ai-bot.vercel.app";
+
+  return (
+    "https://fawaz-ai-bot.vercel.app"
+  );
 }
 
 
@@ -61,8 +134,10 @@ function num(
   value,
   fallback = 0
 ) {
+
   const n =
     Number(value);
+
 
   return Number.isFinite(n)
     ? n
@@ -75,6 +150,7 @@ function clamp(
   min,
   max
 ) {
+
   return Math.max(
     min,
     Math.min(
@@ -89,15 +165,20 @@ function clamp(
 // LOAD MARKET
 // ======================================================
 
-async function loadMarket(req) {
+async function loadMarket(
+  req
+) {
+
   const baseUrl =
     getBaseUrl(req);
+
 
   const response =
     await fetch(
       `${baseUrl}/api/market-agent`,
       {
-        method: "GET",
+        method:
+          "GET",
 
         headers: {
           Accept:
@@ -109,34 +190,49 @@ async function loadMarket(req) {
       }
     );
 
+
   const text =
     await response.text();
 
+
   let data;
 
+
   try {
+
     data =
       JSON.parse(text);
+
   } catch {
+
     data = {
-      raw: text
+      raw:
+        text
     };
   }
 
-  if (!response.ok) {
+
+  if (
+    !response.ok
+  ) {
+
     throw new Error(
       `MARKET_AGENT_HTTP_${response.status}`
     );
   }
 
+
   if (
-    data?.status !== "ok" ||
+    data?.status !==
+      "ok" ||
     !data?.market
   ) {
+
     throw new Error(
       "INVALID_MARKET_AGENT_RESPONSE"
     );
   }
+
 
   return data;
 }
@@ -149,12 +245,20 @@ async function loadMarket(req) {
 function buildSignal(
   marketData
 ) {
+
   const market =
-    marketData.market || {};
+    marketData.market ||
+    {};
+
 
   const marketSignal =
-    marketData.signal || {};
+    marketData.signal ||
+    {};
 
+
+  // ====================================================
+  // MARKET INPUTS
+  // ====================================================
 
   const price =
     num(
@@ -219,19 +323,25 @@ function buildSignal(
 
 
   // ====================================================
-  // INVALID MARKET
+  // BASIC VALIDATION
   // ====================================================
 
-  if (price <= 0) {
-    return {
-      action: "WAIT",
+  if (
+    price <= 0
+  ) {
 
-      confidence: 0,
+    return {
+      action:
+        "WAIT",
+
+      confidence:
+        0,
 
       reason:
-        "Invalid market price",
+        "INVALID_MARKET_PRICE",
 
-      finalScore: 0,
+      finalScore:
+        0,
 
       price,
 
@@ -251,27 +361,41 @@ function buildSignal(
       scalpingScore:
         0,
 
+      marketScalpingScore,
+
       direction,
 
-      marketMode
+      marketMode,
+
+      setup:
+        "NONE"
     };
   }
 
 
   // ====================================================
-  // HARD SPREAD FILTER
+  // HARD SPREAD BLOCK
   // ====================================================
 
-  if (spreadBps > 18) {
-    return {
-      action: "WAIT",
+  if (
+    spreadBps >
+    CONFIG
+      .hardMaxSpreadBps
+  ) {
 
-      confidence: 20,
+    return {
+
+      action:
+        "WAIT",
+
+      confidence:
+        10,
 
       reason:
-        "Spread too wide for micro-scalping",
+        "SPREAD_TOO_EXPENSIVE",
 
-      finalScore: 20,
+      finalScore:
+        10,
 
       price,
 
@@ -289,155 +413,262 @@ function buildSignal(
         imbalance,
 
       scalpingScore:
-        marketScalpingScore,
+        10,
+
+      marketScalpingScore,
 
       direction,
 
-      marketMode
+      marketMode,
+
+      setup:
+        "NONE"
     };
   }
+
+
+  // ====================================================
+  // SETUP DETECTION
+  // ====================================================
+
+  const isDip =
+    momentum1mBps <=
+      CONFIG.dipStartBps &&
+
+    momentum1mBps >=
+      CONFIG.maxDipBps;
+
+
+  const isStrongDip =
+    momentum1mBps <=
+      CONFIG.strongDipBps &&
+
+    momentum1mBps >=
+      CONFIG.maxDipBps;
+
+
+  /*
+    السوق كان نازل خلال 3 دقائق
+    لكن الدقيقة الأخيرة بدأت تهدأ.
+
+    هذا مهم جدًا لأنه أقرب إلى
+    بداية rebound وليس سقوطًا حرًا.
+  */
+
+  const reboundStarting =
+    momentum3mBps < 0 &&
+
+    momentum1mBps >
+      momentum3mBps;
+
+
+  const cleanRebound =
+    momentum3mBps < -2 &&
+
+    momentum1mBps >= -1;
+
+
+  const positiveMomentum =
+    momentum1mBps > 0 &&
+    momentum3mBps >= -2;
+
+
+  const strongMomentum =
+    momentum1mBps >= 3 &&
+    momentum3mBps >= 2;
+
+
+  const bookSupport =
+    imbalance >=
+      CONFIG
+        .positiveImbalance;
+
+
+  const strongBookSupport =
+    imbalance >=
+      CONFIG
+        .strongPositiveImbalance;
 
 
   // ====================================================
   // SCORES
   // ====================================================
 
-  let momentumScore = 0;
-
-  let dipScore = 0;
-
-  let liquidityScore = 0;
+  let spreadScore = 0;
 
   let volatilityScore = 0;
 
-  let spreadScore = 0;
+  let dipScore = 0;
+
+  let reboundScore = 0;
+
+  let momentumScore = 0;
+
+  let liquidityScore = 0;
+
+  let rangeScore = 0;
 
   let trendScore = 0;
 
 
   // ====================================================
-  // SPREAD SCORE
-  //
-  // tight spread = أفضل
-  // ====================================================
-
-  if (spreadBps <= 3) {
-    spreadScore = 20;
-  }
-  else if (spreadBps <= 6) {
-    spreadScore = 16;
-  }
-  else if (spreadBps <= 10) {
-    spreadScore = 10;
-  }
-  else if (spreadBps <= 14) {
-    spreadScore = 5;
-  }
-
-
-  // ====================================================
-  // VOLATILITY SCORE
-  //
-  // نريد حركة كافية
-  // لكن ليست فوضوية جدًا
+  // SPREAD
   // ====================================================
 
   if (
-    volatilityBps >= 4 &&
+    spreadBps <= 2
+  ) {
+
+    spreadScore = 20;
+
+  }
+  else if (
+    spreadBps <= 4
+  ) {
+
+    spreadScore = 18;
+
+  }
+  else if (
+    spreadBps <=
+      CONFIG
+        .preferredSpreadBps
+  ) {
+
+    spreadScore = 14;
+
+  }
+  else if (
+    spreadBps <= 9
+  ) {
+
+    spreadScore = 8;
+
+  }
+  else {
+
+    spreadScore = 3;
+  }
+
+
+  // ====================================================
+  // VOLATILITY
+  // ====================================================
+
+  if (
+    volatilityBps >= 2 &&
     volatilityBps <= 15
   ) {
-    volatilityScore = 20;
+
+    volatilityScore =
+      15;
+
   }
   else if (
-    volatilityBps >= 2 &&
-    volatilityBps < 4
+    volatilityBps >=
+      CONFIG
+        .minVolatilityBps &&
+    volatilityBps < 2
   ) {
-    volatilityScore = 12;
+
+    volatilityScore =
+      8;
+
   }
   else if (
-    volatilityBps > 15 &&
+    volatilityBps >
+      15 &&
     volatilityBps <= 30
   ) {
-    volatilityScore = 13;
+
+    volatilityScore =
+      10;
+
   }
   else if (
-    volatilityBps > 30
+    volatilityBps >
+      30
   ) {
-    volatilityScore = 5;
+
+    volatilityScore =
+      3;
   }
 
 
   // ====================================================
-  // MOMENTUM SCORE
-  //
-  // ارتداد قصير أو تسارع للأعلى
+  // MICRO RANGE
   // ====================================================
 
   if (
-    momentum1mBps >= 2 &&
-    momentum3mBps >= 3
+    microRangeBps >= 12
   ) {
-    momentumScore += 16;
-  }
 
-  if (
-    momentum1mBps >= 4 &&
-    momentum3mBps >= 6
+    rangeScore =
+      10;
+
+  }
+  else if (
+    microRangeBps >= 7
   ) {
-    momentumScore += 8;
-  }
 
-  if (
-    momentum1mBps >= 7
+    rangeScore =
+      8;
+
+  }
+  else if (
+    microRangeBps >=
+      CONFIG
+        .minMicroRangeBps
   ) {
-    momentumScore += 5;
+
+    rangeScore =
+      5;
   }
-
-
-  momentumScore =
-    clamp(
-      momentumScore,
-      0,
-      25
-    );
 
 
   // ====================================================
-  // DIP SCORE
-  //
-  // نزول قصير قابل للارتداد
-  // وليس انهيار قوي
+  // DIP
   // ====================================================
 
-  const mildDip =
-    momentum1mBps <= -2 &&
-    momentum1mBps >= -18;
+  if (
+    isDip
+  ) {
 
-
-  const deeperDip =
-    momentum1mBps < -6 &&
-    momentum1mBps >= -30;
-
-
-  if (mildDip) {
-    dipScore += 10;
+    dipScore +=
+      12;
   }
 
 
   if (
-    deeperDip &&
-    momentum3mBps > -35
+    isStrongDip
   ) {
-    dipScore += 8;
+
+    dipScore +=
+      8;
   }
 
 
-  // لو بدأ الارتداد بعد نزلة
   if (
-    momentum1mBps > -4 &&
-    momentum3mBps < 0
+    momentum1mBps <= -10 &&
+    momentum1mBps >= -25
   ) {
-    dipScore += 6;
+
+    dipScore +=
+      4;
+  }
+
+
+  /*
+    لا نريد محاولة اصطياد
+    نزول عنيف جدًا.
+  */
+
+  if (
+    momentum1mBps < -25
+  ) {
+
+    dipScore -=
+      8;
   }
 
 
@@ -450,57 +681,173 @@ function buildSignal(
 
 
   // ====================================================
-  // ORDER BOOK / LIQUIDITY
+  // REBOUND
   // ====================================================
 
-  if (imbalance >= 0.20) {
-    liquidityScore = 18;
+  if (
+    reboundStarting
+  ) {
+
+    reboundScore +=
+      12;
   }
-  else if (imbalance >= 0.08) {
-    liquidityScore = 14;
+
+
+  if (
+    cleanRebound
+  ) {
+
+    reboundScore +=
+      10;
   }
-  else if (imbalance >= 0) {
-    liquidityScore = 8;
+
+
+  if (
+    reboundStarting &&
+    bookSupport
+  ) {
+
+    reboundScore +=
+      6;
   }
-  else if (imbalance >= -0.15) {
-    liquidityScore = 4;
+
+
+  reboundScore =
+    clamp(
+      reboundScore,
+      0,
+      25
+    );
+
+
+  // ====================================================
+  // MOMENTUM
+  // ====================================================
+
+  if (
+    positiveMomentum
+  ) {
+
+    momentumScore +=
+      8;
+  }
+
+
+  if (
+    strongMomentum
+  ) {
+
+    momentumScore +=
+      10;
+  }
+
+
+  if (
+    momentum1mBps >= 6
+  ) {
+
+    momentumScore +=
+      4;
+  }
+
+
+  momentumScore =
+    clamp(
+      momentumScore,
+      0,
+      20
+    );
+
+
+  // ====================================================
+  // ORDER BOOK
+  // ====================================================
+
+  if (
+    strongBookSupport
+  ) {
+
+    liquidityScore =
+      18;
+
+  }
+  else if (
+    bookSupport
+  ) {
+
+    liquidityScore =
+      14;
+
+  }
+  else if (
+    imbalance >= -0.05
+  ) {
+
+    liquidityScore =
+      8;
+
+  }
+  else if (
+    imbalance >= -0.15
+  ) {
+
+    liquidityScore =
+      4;
+
   }
   else {
-    liquidityScore = 0;
+
+    liquidityScore =
+      0;
   }
 
 
   // ====================================================
-  // TREND SCORE
+  // TREND
   // ====================================================
 
-  if (direction === "UP") {
-    trendScore = 12;
+  if (
+    direction ===
+      "UP"
+  ) {
+
+    trendScore =
+      10;
+
   }
   else if (
-    direction === "FLAT"
+    direction ===
+      "FLAT"
   ) {
-    trendScore = 7;
+
+    trendScore =
+      7;
+
   }
   else if (
-    direction === "DOWN" &&
-    dipScore >= 14
+    direction ===
+      "DOWN" &&
+    (
+      reboundStarting ||
+      cleanRebound
+    )
   ) {
-    // نزول لكن قابل للارتداد
-    trendScore = 4;
+
+    trendScore =
+      5;
   }
 
 
   // ====================================================
-  // MARKET AGENT BASE SCORE
+  // MARKET AGENT COMPONENT
   // ====================================================
 
   const marketScoreComponent =
     clamp(
       marketScalpingScore *
-      0.15,
+      0.10,
       0,
-      15
+      10
     );
 
 
@@ -509,20 +856,90 @@ function buildSignal(
   // ====================================================
 
   let finalScore =
+
     spreadScore +
+
     volatilityScore +
+
+    rangeScore +
+
     liquidityScore +
+
     trendScore +
+
     marketScoreComponent;
 
 
-  // نختار أقوى setup:
-  // momentum أو dip
-  finalScore +=
-    Math.max(
-      momentumScore,
-      dipScore
-    );
+  /*
+    أهم تغيير في V5:
+
+    لا نختار فقط أعلى قيمة
+    بين dip و momentum.
+
+    نعطي وزنًا خاصًا
+    للـ dip + rebound.
+  */
+
+  if (
+    isDip
+  ) {
+
+    finalScore +=
+      dipScore;
+
+    finalScore +=
+      reboundScore;
+
+  }
+  else {
+
+    finalScore +=
+      momentumScore;
+  }
+
+
+  // ====================================================
+  // BONUSES
+  // ====================================================
+
+  if (
+    isDip &&
+    reboundStarting
+  ) {
+
+    finalScore +=
+      8;
+  }
+
+
+  if (
+    isDip &&
+    strongBookSupport
+  ) {
+
+    finalScore +=
+      6;
+  }
+
+
+  if (
+    cleanRebound &&
+    spreadBps <= 5
+  ) {
+
+    finalScore +=
+      7;
+  }
+
+
+  if (
+    strongMomentum &&
+    spreadBps <= 4
+  ) {
+
+    finalScore +=
+      5;
+  }
 
 
   // ====================================================
@@ -530,37 +947,52 @@ function buildSignal(
   // ====================================================
 
   if (
-    microRangeBps < 6
+    spreadBps > 8
   ) {
-    finalScore -= 10;
+
+    finalScore -=
+      10;
   }
 
 
   if (
-    volatilityBps < 2
+    volatilityBps <
+      CONFIG
+        .minVolatilityBps
   ) {
-    finalScore -= 12;
+
+    finalScore -=
+      10;
   }
 
 
   if (
-    imbalance < -0.30
+    microRangeBps <
+      CONFIG
+        .minMicroRangeBps
   ) {
-    finalScore -= 15;
+
+    finalScore -=
+      8;
   }
 
 
   if (
-    spreadBps > 12
+    imbalance < -0.25
   ) {
-    finalScore -= 10;
+
+    finalScore -=
+      15;
   }
 
 
   if (
-    momentum1mBps < -35
+    momentum1mBps <
+      CONFIG.maxDipBps
   ) {
-    finalScore -= 20;
+
+    finalScore -=
+      25;
   }
 
 
@@ -575,7 +1007,49 @@ function buildSignal(
 
 
   // ====================================================
-  // DECISION
+  // DETERMINE SETUP
+  // ====================================================
+
+  let setup =
+    "NONE";
+
+
+  if (
+    isDip &&
+    reboundStarting
+  ) {
+
+    setup =
+      "DIP_REBOUND";
+
+  }
+  else if (
+    isDip
+  ) {
+
+    setup =
+      "MICRO_DIP";
+
+  }
+  else if (
+    strongMomentum
+  ) {
+
+    setup =
+      "MOMENTUM";
+
+  }
+  else if (
+    positiveMomentum
+  ) {
+
+    setup =
+      "MICRO_MOMENTUM";
+  }
+
+
+  // ====================================================
+  // BUY DECISION
   // ====================================================
 
   let action =
@@ -583,62 +1057,115 @@ function buildSignal(
 
 
   let reason =
-    "No high-quality micro-swing setup";
+    "NO_MICRO_ENTRY";
 
 
   /*
-    أسرع من v3:
-    سابقًا BUY غالبًا يحتاج 70+
-    الآن:
-    58+ = candidate
+    DIP entry:
+    threshold أخف لأن هدفنا
+    اصطياد النزلات الصغيرة.
   */
 
+  const dipEntry =
+    isDip &&
+    finalScore >=
+      CONFIG
+        .dipBuyScore;
+
+
+  /*
+    Normal momentum entry
+  */
+
+  const normalEntry =
+    (
+      positiveMomentum ||
+      reboundStarting
+    ) &&
+    finalScore >=
+      CONFIG
+        .normalBuyScore;
+
+
   if (
-    finalScore >= 58
+    dipEntry
   ) {
+
     action =
       "BUY";
 
+    reason =
+      reboundStarting
+        ? "MICRO_DIP_REBOUND"
+        : "MICRO_DIP_ENTRY";
 
-    if (
-      dipScore >
-      momentumScore
-    ) {
-      reason =
-        "Micro-dip reversal with liquidity support";
-    }
-    else {
-      reason =
-        "Positive micro-momentum with favorable spread and volatility";
-    }
+  }
+  else if (
+    normalEntry
+  ) {
+
+    action =
+      "BUY";
+
+    reason =
+      strongMomentum
+        ? "MICRO_MOMENTUM"
+        : "EARLY_REBOUND";
   }
 
 
   // ====================================================
-  // EXTRA QUALITY GUARD
+  // QUALITY GUARDS
   // ====================================================
 
   if (
     action === "BUY" &&
-    spreadBps > 14
+    spreadBps >
+      CONFIG
+        .hardMaxSpreadBps
   ) {
+
     action =
       "WAIT";
 
     reason =
-      "Setup detected but spread is too expensive";
+      "SPREAD_TOO_HIGH";
   }
 
 
   if (
     action === "BUY" &&
-    volatilityBps < 2
+    momentum1mBps <
+      CONFIG
+        .maxDipBps
   ) {
+
     action =
       "WAIT";
 
     reason =
-      "Setup detected but volatility is insufficient";
+      "DIP_TOO_AGGRESSIVE";
+  }
+
+
+  /*
+    إذا النزول قوي ودفتر
+    الأوامر سلبي جدًا:
+    ننتظر بدل catching knife.
+  */
+
+  if (
+    action === "BUY" &&
+    isStrongDip &&
+    imbalance < -0.20 &&
+    !reboundStarting
+  ) {
+
+    action =
+      "WAIT";
+
+    reason =
+      "SELL_PRESSURE_TOO_STRONG";
   }
 
 
@@ -657,24 +1184,52 @@ function buildSignal(
     finalScore;
 
 
-  /*
-    Market Agent لا يلغي Signal Agent،
-    فقط يرفع أو يخفض الثقة.
-  */
-
   if (
     action === "BUY" &&
     marketAction === "BUY"
   ) {
-    confidence += 8;
+
+    confidence +=
+      5;
   }
 
+
+  /*
+    في V4 كان WAIT من Market
+    يخفض الثقة بقوة.
+
+    في V5 لا نخلي Market Agent
+    يمنع micro dip إذا Signal
+    اكتشفها بنفسه.
+  */
 
   if (
     action === "BUY" &&
     marketAction === "WAIT"
   ) {
-    confidence -= 5;
+
+    confidence -=
+      2;
+  }
+
+
+  if (
+    action === "BUY" &&
+    reboundStarting
+  ) {
+
+    confidence +=
+      3;
+  }
+
+
+  if (
+    action === "BUY" &&
+    strongBookSupport
+  ) {
+
+    confidence +=
+      3;
   }
 
 
@@ -689,27 +1244,37 @@ function buildSignal(
 
 
   // ====================================================
-  // FINAL CONFIDENCE FLOOR
+  // CONFIDENCE FLOOR
   // ====================================================
 
   if (
     action === "BUY" &&
-    confidence < 55
+    confidence <
+      CONFIG
+        .minimumBuyConfidence
   ) {
+
     action =
       "WAIT";
 
     reason =
-      "Setup detected but combined confidence is insufficient";
+      "CONFIDENCE_BELOW_AGGRESSIVE_THRESHOLD";
   }
 
 
+  // ====================================================
+  // RETURN
+  // ====================================================
+
   return {
+
     action,
 
     confidence,
 
     reason,
+
+    setup,
 
     finalScore,
 
@@ -737,17 +1302,40 @@ function buildSignal(
 
     dipScore,
 
+    reboundScore,
+
     liquidityScore,
 
     volatilityScore,
 
     spreadScore,
 
+    rangeScore,
+
     trendScore,
 
     direction,
 
-    marketMode
+    marketMode,
+
+    flags: {
+
+      isDip,
+
+      isStrongDip,
+
+      reboundStarting,
+
+      cleanRebound,
+
+      positiveMomentum,
+
+      strongMomentum,
+
+      bookSupport,
+
+      strongBookSupport
+    }
   };
 }
 
@@ -760,11 +1348,18 @@ export default async function handler(
   req,
   res
 ) {
-  if (req.method !== "GET") {
+
+  if (
+    req.method !==
+      "GET"
+  ) {
+
     return res
       .status(405)
       .json({
-        status: "error",
+
+        status:
+          "error",
 
         message:
           "GET only"
@@ -773,8 +1368,11 @@ export default async function handler(
 
 
   try {
+
     const marketData =
-      await loadMarket(req);
+      await loadMarket(
+        req
+      );
 
 
     const analysis =
@@ -784,8 +1382,9 @@ export default async function handler(
 
 
     const signal = {
+
       signalId:
-        crypto.randomUUID(),
+        randomUUID(),
 
       pair:
         "SOL-USDC",
@@ -799,6 +1398,9 @@ export default async function handler(
       reason:
         analysis.reason,
 
+      setup:
+        analysis.setup,
+
       currentPrice:
         analysis.price,
 
@@ -806,50 +1408,74 @@ export default async function handler(
         analysis.spreadBps,
 
       volatilityBps:
-        analysis.volatilityBps,
+        analysis
+          .volatilityBps,
 
       microRangeBps:
-        analysis.microRangeBps,
+        analysis
+          .microRangeBps,
 
       momentum1mBps:
-        analysis.momentum1mBps,
+        analysis
+          .momentum1mBps,
 
       momentum3mBps:
-        analysis.momentum3mBps,
+        analysis
+          .momentum3mBps,
 
       orderBookImbalance:
         analysis
           .orderBookImbalance,
 
       scalpingScore:
-        analysis.scalpingScore,
+        analysis
+          .scalpingScore,
 
       marketScalpingScore:
         analysis
           .marketScalpingScore,
 
       finalScore:
-        analysis.finalScore,
+        analysis
+          .finalScore,
 
       scoreBreakdown: {
+
         momentum:
-          analysis.momentumScore,
+          analysis
+            .momentumScore,
 
         dip:
-          analysis.dipScore,
+          analysis
+            .dipScore,
+
+        rebound:
+          analysis
+            .reboundScore,
 
         liquidity:
-          analysis.liquidityScore,
+          analysis
+            .liquidityScore,
 
         volatility:
-          analysis.volatilityScore,
+          analysis
+            .volatilityScore,
 
         spread:
-          analysis.spreadScore,
+          analysis
+            .spreadScore,
+
+        range:
+          analysis
+            .rangeScore,
 
         trend:
-          analysis.trendScore
+          analysis
+            .trendScore
       },
+
+      flags:
+        analysis.flags,
 
       direction:
         analysis.direction,
@@ -872,19 +1498,44 @@ export default async function handler(
     return res
       .status(200)
       .json({
-        status: "ok",
+
+        status:
+          "ok",
 
         engine:
-          "FAWAZ_SIGNAL_AGENT_V4",
+          "FAWAZ_SIGNAL_AGENT_V5",
+
+        strategy:
+          "AGGRESSIVE_MICRO_DIP_REBOUND",
 
         signal,
 
         market:
-          marketData.market
+          marketData.market,
+
+        config: {
+
+          hardMaxSpreadBps:
+            CONFIG
+              .hardMaxSpreadBps,
+
+          dipBuyScore:
+            CONFIG
+              .dipBuyScore,
+
+          normalBuyScore:
+            CONFIG
+              .normalBuyScore,
+
+          minimumBuyConfidence:
+            CONFIG
+              .minimumBuyConfidence
+        }
       });
 
-  }
-  catch (error) {
+
+  } catch (error) {
+
     console.error(
       "Signal Agent Error:",
       error
@@ -894,14 +1545,20 @@ export default async function handler(
     return res
       .status(500)
       .json({
-        status: "error",
+
+        status:
+          "error",
 
         engine:
-          "FAWAZ_SIGNAL_AGENT_V4",
+          "FAWAZ_SIGNAL_AGENT_V5",
 
         message:
           error?.message ||
-          "Signal Agent failed"
+          "Signal Agent failed",
+
+        timestamp:
+          new Date()
+            .toISOString()
       });
   }
 }
