@@ -3,127 +3,146 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>FAWAZ AI DEX TRADER</title>
+<title>FAWAZ AI TRADER</title>
 
 <style>
-*{box-sizing:border-box}
+*{
+  box-sizing:border-box;
+}
+
 body{
   margin:0;
   padding:18px;
-  font-family:Arial,sans-serif;
-  background:#f6f7f9;
-  color:#111;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
+  background:#0c0f14;
+  color:#fff;
 }
-.container{max-width:760px;margin:auto}
-.header,.panel,.stat{
-  background:#fff;
-  box-shadow:0 3px 16px rgba(0,0,0,.06);
+
+.container{
+  max-width:680px;
+  margin:auto;
 }
+
 .header{
-  padding:22px;
+  padding:20px;
+  margin-bottom:14px;
+  background:#151a22;
+  border:1px solid #232a35;
   border-radius:22px;
-  margin-bottom:16px;
 }
-h1{margin:0;font-size:26px}
-h2{margin:0 0 14px;font-size:21px}
-.wallet{margin-top:12px;color:#555;font-size:14px}
-.badge{
-  display:inline-block;
-  margin-top:12px;
-  padding:8px 13px;
-  border-radius:999px;
-  background:#e8f7ee;
-  color:#087a38;
+
+h1{
+  margin:0;
+  font-size:25px;
   font-weight:900;
 }
+
+.sub{
+  margin-top:8px;
+  color:#8e98a7;
+  font-size:13px;
+}
+
 .status{
   margin-top:14px;
-  padding:14px;
-  background:#f1f3f5;
-  border-radius:13px;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:8px 12px;
+  border-radius:999px;
+  background:#10251a;
+  color:#3ee58a;
   font-weight:800;
+  font-size:13px;
 }
+
+.dot{
+  width:9px;
+  height:9px;
+  border-radius:50%;
+  background:#3ee58a;
+}
+
+.hero{
+  background:linear-gradient(145deg,#171d26,#11161d);
+  border:1px solid #252d39;
+  padding:24px;
+  border-radius:24px;
+  margin-bottom:14px;
+}
+
+.label{
+  color:#8d97a5;
+  font-size:13px;
+  margin-bottom:8px;
+}
+
+.big{
+  font-size:36px;
+  font-weight:950;
+  letter-spacing:-1px;
+}
+
+.pnl{
+  margin-top:8px;
+  font-size:18px;
+  font-weight:900;
+}
+
+.positive{
+  color:#32d583;
+}
+
+.negative{
+  color:#f04438;
+}
+
 .grid{
   display:grid;
   grid-template-columns:repeat(2,1fr);
   gap:12px;
-  margin-bottom:16px;
 }
-.stat{
-  border-radius:17px;
-  padding:17px;
+
+.card{
+  background:#151a22;
+  border:1px solid #232a35;
+  border-radius:20px;
+  padding:18px;
 }
-.stat-title{
-  font-size:13px;
-  color:#666;
-  margin-bottom:8px;
-}
-.stat-value{
-  font-size:21px;
+
+.value{
+  font-size:25px;
   font-weight:900;
+  margin-top:6px;
 }
-.panel{
-  padding:19px;
-  border-radius:18px;
-  margin-bottom:16px;
-}
-.row{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  gap:14px;
-  padding:10px 0;
-  border-bottom:1px solid #eee;
-}
-.row:last-child{border-bottom:0}
-.row span:first-child{color:#666}
-.buy{color:#128a43;font-weight:900}
-.sell{color:#d32f2f;font-weight:900}
-.hold{color:#555;font-weight:900}
-.positive{color:#128a43}
-.negative{color:#d32f2f}
-.neutral{color:#555}
-.slots{display:grid;gap:10px;margin-top:10px}
-.slot,.candidate{
-  background:#f7f8fa;
-  border:1px solid #eceef1;
-  border-radius:14px;
-  padding:14px;
-}
-.slot-title{
-  display:flex;
-  justify-content:space-between;
-  font-weight:900;
-}
-.empty{color:#888}
-button{
-  width:100%;
-  border:0;
-  padding:16px;
-  border-radius:15px;
-  font-size:17px;
-  font-weight:900;
-  cursor:pointer;
-  margin-top:10px;
-}
-#refreshButton{
-  background:#111;
-  color:#fff;
-}
-button:disabled{opacity:.5}
-.ltr{
-  direction:ltr;
-  unicode-bidi:isolate;
-}
-.small{
+
+.footer{
+  margin-top:14px;
+  text-align:center;
+  color:#717b89;
   font-size:12px;
-  color:#777;
-  margin-top:10px;
-  line-height:1.7;
 }
-@media(max-width:520px){
-  h1{font-size:22px}
-  .stat-value{font-size:18px}
+
+.loading{
+  color:#9aa4b2;
+}
+
+.error{
+  color:#f97066;
+}
+
+@media(max-width:480px){
+  .big{
+    font-size:31px;
+  }
+
+  .value{
+    font-size:21px;
+  }
+
+  h1{
+    font-size:22px;
+  }
 }
 </style>
 </head>
@@ -132,896 +151,208 @@ button:disabled{opacity:.5}
 
 <div class="container">
 
-<div class="header">
+  <div class="header">
+    <h1>⚡ FAWAZ AI TRADER</h1>
 
-<h1>⚡ FAWAZ AI DEX TRADER</h1>
+    <div class="sub">
+      SOL / USDC · FULL AUTO
+    </div>
 
-<div class="wallet">
-  <b>محفظة البوت:</b>
-  <span id="walletAddress">-</span>
-</div>
-
-<div class="badge">
-  🟢 LIVE AI MARKET ENGINE
-</div>
-
-<div id="botStatus" class="status">
-  ⏳ جاري تشغيل الوكلاء...
-</div>
-
-</div>
-
-
-<div class="grid">
-
-<div class="stat">
-  <div class="stat-title">رأس المال</div>
-  <div id="capitalTotal" class="stat-value">
-    5.000 USDC
+    <div class="status">
+      <span class="dot"></span>
+      <span id="systemStatus">
+        جاري الاتصال...
+      </span>
+    </div>
   </div>
-</div>
 
-<div class="stat">
-  <div class="stat-title">المتاح للتداول</div>
-  <div id="capitalAvailable" class="stat-value">
-    -
+
+  <div class="hero">
+
+    <div class="label">
+      رأس المال الحالي مع الأرباح
+    </div>
+
+    <div
+      id="capitalTotal"
+      class="big"
+    >
+      -
+    </div>
+
+    <div
+      id="totalPnl"
+      class="pnl"
+    >
+      الربح: -
+    </div>
+
   </div>
-</div>
 
-<div class="stat">
-  <div class="stat-title">الربح الإجمالي</div>
-  <div id="totalPnl" class="stat-value">
-    0.0000 USDC
+
+  <div class="grid">
+
+    <div class="card">
+      <div class="label">
+        الصفقات المفتوحة الآن
+      </div>
+
+      <div
+        id="openTrades"
+        class="value"
+      >
+        -
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        إجمالي الصفقات
+      </div>
+
+      <div
+        id="totalTrades"
+        class="value"
+      >
+        -
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        الصفقات الرابحة
+      </div>
+
+      <div
+        id="wins"
+        class="value positive"
+      >
+        -
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        الصفقات الخاسرة
+      </div>
+
+      <div
+        id="losses"
+        class="value negative"
+      >
+        -
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        نسبة النجاح
+      </div>
+
+      <div
+        id="winRate"
+        class="value"
+      >
+        -
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        المتاح للتداول
+      </div>
+
+      <div
+        id="available"
+        class="value"
+      >
+        -
+      </div>
+    </div>
+
   </div>
-</div>
 
-<div class="stat">
-  <div class="stat-title">نسبة النجاح</div>
-  <div id="winRate" class="stat-value">
-    0%
+
+  <div class="footer">
+    آخر تحديث:
+    <span id="lastUpdate">-</span>
   </div>
-</div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>🤖 قرار الوكلاء</h2>
-
-<div class="row">
-  <span>القرار</span>
-  <b id="decision" class="hold">-</b>
-</div>
-
-<div class="row">
-  <span>الثقة</span>
-  <b id="confidence">-</b>
-</div>
-
-<div class="row">
-  <span>السبب</span>
-  <b id="reason">-</b>
-</div>
-
-<div class="row">
-  <span>Risk Mode</span>
-  <b id="riskMode">-</b>
-</div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>📊 تحليل السوق</h2>
-
-<div class="row">
-  <span>سعر SOL</span>
-  <b id="price">-</b>
-</div>
-
-<div class="row">
-  <span>Market Mode</span>
-  <b id="marketMode">-</b>
-</div>
-
-<div class="row">
-  <span>Scalping Score</span>
-  <b id="scalpingScore">-</b>
-</div>
-
-<div class="row">
-  <span>Spread</span>
-  <b id="spreadBps">-</b>
-</div>
-
-<div class="row">
-  <span>Volatility</span>
-  <b id="volatilityBps">-</b>
-</div>
-
-<div class="row">
-  <span>الاتجاه</span>
-  <b id="direction">-</b>
-</div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>💰 رأس المال</h2>
-
-<div class="row">
-  <span>حجم Slot</span>
-  <b id="slotSize">1.000 USDC</b>
-</div>
-
-<div class="row">
-  <span>المستخدم</span>
-  <b id="usedCapital">0.000 USDC</b>
-</div>
-
-<div class="row">
-  <span>الاحتياطي</span>
-  <b id="reserve">1.000 USDC</b>
-</div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>🎯 Slots</h2>
-
-<div class="row">
-  <span>المفتوحة</span>
-  <b id="openSlots" class="ltr">0 / 4</b>
-</div>
-
-<div id="slotsContainer" class="slots"></div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>🟢 BUY Candidate</h2>
-
-<div id="noBuyCandidate" class="neutral">
-  لا توجد فرصة شراء معتمدة حاليًا.
-</div>
-
-<div
-  id="buyCandidateBox"
-  class="candidate"
-  style="display:none"
->
-
-<div class="row">
-  <span>Slot</span>
-  <b id="buySlot">-</b>
-</div>
-
-<div class="row">
-  <span>قيمة الصفقة</span>
-  <b id="buyAmount">-</b>
-</div>
-
-<div class="row">
-  <span>Net Edge</span>
-  <b id="buyEdge">-</b>
-</div>
-
-<div class="row">
-  <span>Slippage</span>
-  <b id="buySlippage">-</b>
-</div>
-
-<div class="row">
-  <span>Target</span>
-  <b id="buyTarget">-</b>
-</div>
-
-<div class="row">
-  <span>الثقة</span>
-  <b id="buyConfidence">-</b>
-</div>
-
-</div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>🔴 SELL Candidates</h2>
-
-<div id="sellCandidates">
-  لا توجد صفقة تحتاج خروجًا حاليًا.
-</div>
-
-</div>
-
-
-<div class="panel">
-
-<h2>📈 النتائج</h2>
-
-<div class="row">
-  <span>صفقات 24 ساعة</span>
-  <b id="dayTrades">0</b>
-</div>
-
-<div class="row">
-  <span>الرابحة</span>
-  <b id="wins">0</b>
-</div>
-
-<div class="row">
-  <span>الخاسرة</span>
-  <b id="losses">0</b>
-</div>
-
-<div class="row">
-  <span>إجمالي الصفقات</span>
-  <b id="totalTrades">0</b>
-</div>
-
-</div>
-
-
-<button id="refreshButton">
-  🔄 تحديث تحليل السوق الآن
-</button>
-
-<div class="small">
-  يتم تحديث Market Agent + Signal Agent + Risk Agent
-  وقراءة Slots وNeon بدون إرسال صفقة مالية.
-</div>
 
 </div>
 
 
 <script>
 
-const MAX_SLOTS = 4;
-
-
-// =====================================
-// HELPERS
-// =====================================
-
-function n(value,decimals=3){
-  const x=Number(value);
-  return Number.isFinite(x)
-    ? x.toFixed(decimals)
-    : "-";
-}
-
-
-function setDecision(value){
-
-  const el=
-    document.getElementById(
-      "decision"
-    );
-
-  const action=
-    String(
-      value || "WAIT"
-    ).toUpperCase();
-
-  el.textContent=action;
-
-  el.className=
-    action==="BUY"
-      ? "buy"
-      : action==="SELL"
-      ? "sell"
-      : "hold";
-}
-
-
-// =====================================
-// SLOTS
-// =====================================
-
-function renderSlots(
-  positions,
-  currentPrice
+function number(
+  value,
+  fallback = 0
 ){
+  const n = Number(value);
 
-  const container=
-    document.getElementById(
-      "slotsContainer"
-    );
-
-  container.innerHTML="";
-
-
-  for(
-    let slot=1;
-    slot<=MAX_SLOTS;
-    slot++
-  ){
-
-    const position=
-      positions.find(
-        p=>
-          Number(
-            p.slot_id
-          )===slot
-      );
-
-
-    const card=
-      document.createElement(
-        "div"
-      );
-
-    card.className="slot";
-
-
-    if(!position){
-
-      card.innerHTML=`
-        <div class="slot-title">
-          <span>Slot ${slot}</span>
-          <span class="empty">فارغ</span>
-        </div>
-      `;
-
-    }else{
-
-      const entry=
-        Number(
-          position.entry_price
-        );
-
-      const pnl=
-        entry>0 &&
-        currentPrice>0
-          ? (
-              (
-                currentPrice-
-                entry
-              )/
-              entry
-            )*100
-          :0;
-
-
-      card.innerHTML=`
-
-        <div class="slot-title">
-          <span>Slot ${slot}</span>
-          <span class="buy">OPEN</span>
-        </div>
-
-        <div class="row">
-          <span>سعر الدخول</span>
-          <b>${n(entry,4)}</b>
-        </div>
-
-        <div class="row">
-          <span>قيمة الدخول</span>
-          <b>
-            ${n(
-              position.entry_usdc,
-              3
-            )} USDC
-          </b>
-        </div>
-
-        <div class="row">
-          <span>كمية SOL</span>
-          <b>
-            ${n(
-              position.entry_sol,
-              7
-            )}
-          </b>
-        </div>
-
-        <div class="row">
-          <span>الربح العائم</span>
-
-          <b class="${
-            pnl>=0
-              ? "positive"
-              : "negative"
-          }">
-
-            ${n(pnl,3)}%
-
-          </b>
-        </div>
-      `;
-    }
-
-
-    container.appendChild(
-      card
-    );
-  }
+  return Number.isFinite(n)
+    ? n
+    : fallback;
 }
 
 
-// =====================================
-// SELL CANDIDATES
-// =====================================
-
-function renderSellCandidates(
-  candidates
+function usdc(
+  value,
+  decimals = 4
 ){
-
-  const container=
-    document.getElementById(
-      "sellCandidates"
-    );
-
-
-  if(
-    !Array.isArray(candidates) ||
-    candidates.length===0
-  ){
-
-    container.textContent=
-      "لا توجد صفقة تحتاج خروجًا حاليًا.";
-
-    return;
-  }
-
-
-  container.innerHTML="";
-
-
-  for(
-    const candidate
-    of candidates
-  ){
-
-    const pnlPct=
-      Number(
-        candidate.pnlBps ||
-        0
-      )/100;
-
-
-    const box=
-      document.createElement(
-        "div"
-      );
-
-    box.className=
-      "candidate";
-
-
-    box.innerHTML=`
-
-      <div class="row">
-        <span>Slot</span>
-        <b>${candidate.slotId}</b>
-      </div>
-
-      <div class="row">
-        <span>سبب الخروج</span>
-        <b>
-          ${candidate.reason || "-"}
-        </b>
-      </div>
-
-      <div class="row">
-        <span>PnL</span>
-
-        <b class="${
-          pnlPct>=0
-            ? "positive"
-            : "negative"
-        }">
-
-          ${n(pnlPct,3)}%
-
-        </b>
-      </div>
-
-      <div class="row">
-        <span>كمية SOL</span>
-
-        <b>
-          ${n(
-            candidate.amountSol,
-            7
-          )}
-        </b>
-      </div>
-    `;
-
-
-    container.appendChild(
-      box
-    );
-  }
-}
-
-
-// =====================================
-// UPDATE UI
-// =====================================
-
-function updateDashboard(data){
-
-  const signal=
-    data.signal || {};
-
-  const capital=
-    data.capital || {};
-
-  const dashboard=
-    data.dashboard || {};
-
-  const day=
-    dashboard.last24Hours ||
-    {};
-
-  const total=
-    dashboard.allTime ||
-    {};
-
-  const positions=
-    Array.isArray(
-      dashboard.openPositions
-    )
-      ? dashboard.openPositions
-      : [];
-
-
-  document.getElementById(
-    "botStatus"
-  ).textContent=
-    data.status==="ok"
-      ? "🟢 جميع الوكلاء يعملون"
-      : "🔴 خطأ في المحرك";
-
-
-  // WALLET
-
-  const wallet=
-    String(
-      data.walletAddress ||
-      "-"
-    );
-
-
-  document.getElementById(
-    "walletAddress"
-  ).textContent=
-    wallet.length>14
-      ? wallet.slice(0,7)+
-        "..."+
-        wallet.slice(-6)
-      : wallet;
-
-
-  // CAPITAL
-
-  document.getElementById(
-    "capitalTotal"
-  ).textContent=
-    n(
-      capital.total || 5,
-      3
-    )+" USDC";
-
-
-  document.getElementById(
-    "capitalAvailable"
-  ).textContent=
-    n(
-      capital.availableForTrading || 0,
-      3
-    )+" USDC";
-
-
-  document.getElementById(
-    "slotSize"
-  ).textContent=
-    n(
-      capital.slotSize || 1,
-      3
-    )+" USDC";
-
-
-  document.getElementById(
-    "usedCapital"
-  ).textContent=
-    n(
-      capital.used || 0,
-      3
-    )+" USDC";
-
-
-  document.getElementById(
-    "reserve"
-  ).textContent=
-    n(
-      capital.reserve || 1,
-      3
-    )+" USDC";
-
-
-  // AGENTS
-
-  setDecision(
-    signal.action
-  );
-
-
-  document.getElementById(
-    "confidence"
-  ).textContent=
-    signal.confidence!=null
-      ? signal.confidence+"%"
-      : "-";
-
-
-  document.getElementById(
-    "reason"
-  ).textContent=
-    signal.reason || "-";
-
-
-  document.getElementById(
-    "riskMode"
-  ).textContent=
-    data.riskMode || "-";
-
-
-  // MARKET
-
-  const currentPrice=
-    Number(
-      signal.currentPrice
-    );
-
-
-  document.getElementById(
-    "price"
-  ).textContent=
-    n(
-      currentPrice,
-      4
-    )+" USDC";
-
-
-  document.getElementById(
-    "marketMode"
-  ).textContent=
-    signal.marketMode || "-";
-
-
-  document.getElementById(
-    "scalpingScore"
-  ).innerHTML=
-    `<span class="ltr">${
-      signal.scalpingScore ?? 0
-    } / 100</span>`;
-
-
-  document.getElementById(
-    "spreadBps"
-  ).textContent=
-    n(
-      signal.spreadBps || 0,
-      2
-    )+" bps";
-
-
-  document.getElementById(
-    "volatilityBps"
-  ).textContent=
-    n(
-      signal.volatilityBps || 0,
-      2
-    )+" bps";
-
-
-  document.getElementById(
-    "direction"
-  ).textContent=
-    signal.direction || "-";
-
-
-  // STATS
-
-  document.getElementById(
-    "totalPnl"
-  ).textContent=
-    n(
-      total.pnl || 0,
-      4
-    )+" USDC";
-
-
-  document.getElementById(
-    "winRate"
-  ).textContent=
-    n(
-      total.winRate || 0,
-      1
-    )+"%";
-
-
-  document.getElementById(
-    "dayTrades"
-  ).textContent=
-    day.trades || 0;
-
-
-  document.getElementById(
-    "wins"
-  ).textContent=
-    total.wins || 0;
-
-
-  document.getElementById(
-    "losses"
-  ).textContent=
-    total.losses || 0;
-
-
-  document.getElementById(
-    "totalTrades"
-  ).textContent=
-    total.trades || 0;
-
-
-  // SLOTS
-
-  document.getElementById(
-    "openSlots"
-  ).innerHTML=
-    `<span class="ltr">${
-      positions.length
-    } / ${MAX_SLOTS}</span>`;
-
-
-  renderSlots(
-    positions,
-    currentPrice
-  );
-
-
-  // BUY CANDIDATE
-
-  const candidate=
-    data.buyCandidate;
-
-
-  const noBuy=
-    document.getElementById(
-      "noBuyCandidate"
-    );
-
-
-  const box=
-    document.getElementById(
-      "buyCandidateBox"
-    );
-
-
-  if(
-    candidate &&
-    candidate.approved===true
-  ){
-
-    noBuy.style.display=
-      "none";
-
-    box.style.display=
-      "block";
-
-
-    document.getElementById(
-      "buySlot"
-    ).textContent=
-      candidate.slotId;
-
-
-    document.getElementById(
-      "buyAmount"
-    ).textContent=
-      n(
-        candidate.amountUsd,
-        3
-      )+" USDC";
-
-
-    document.getElementById(
-      "buyEdge"
-    ).textContent=
-      candidate.netEdgeBps!=null
-        ? n(
-            candidate.netEdgeBps,
-            2
-          )+" bps"
-        : "-";
-
-
-    document.getElementById(
-      "buySlippage"
-    ).textContent=
-      n(
-        candidate
-          .estimatedSlippageBps,
-        2
-      )+" bps";
-
-
-    document.getElementById(
-      "buyTarget"
-    ).textContent=
-      n(
-        candidate.targetBps,
-        2
-      )+" bps";
-
-
-    document.getElementById(
-      "buyConfidence"
-    ).textContent=
-      n(
-        candidate.confidence,
-        0
-      )+"%";
-
-  }else{
-
-    noBuy.style.display=
-      "block";
-
-    box.style.display=
-      "none";
-  }
-
-
-  renderSellCandidates(
-    data.sellCandidates
+  return (
+    number(value)
+      .toFixed(decimals) +
+    " USDC"
   );
 }
 
 
-// =====================================
-// REFRESH
-// =====================================
+function setPnl(
+  value
+){
+  const pnl =
+    number(value);
 
-async function refreshAnalysis(){
-
-  const button=
+  const el =
     document.getElementById(
-      "refreshButton"
+      "totalPnl"
     );
 
-  const status=
-    document.getElementById(
-      "botStatus"
+  el.textContent =
+    "الربح: " +
+    (
+      pnl >= 0
+        ? "+"
+        : ""
+    ) +
+    pnl.toFixed(6) +
+    " USDC";
+
+  el.className =
+    "pnl " +
+    (
+      pnl >= 0
+        ? "positive"
+        : "negative"
     );
+}
 
 
-  button.disabled=true;
+async function refresh(){
 
-  button.textContent=
-    "⏳ الذكاء يحلل السوق...";
-
-  status.textContent=
-    "🤖 Market + Signal + Risk يعملون";
-
+  const status =
+    document.getElementById(
+      "systemStatus"
+    );
 
   try{
 
-    const response=
+    const response =
       await fetch(
         "/api/trade-orchestrator",
         {
@@ -1034,64 +365,128 @@ async function refreshAnalysis(){
         }
       );
 
-
-    const data=
+    const data =
       await response.json();
-
 
     if(!response.ok){
       throw new Error(
         data.message ||
-        "فشل تحليل السوق"
+        "API ERROR"
       );
     }
 
 
-    updateDashboard(data);
+    const capital =
+      data.capital || {};
+
+    const dashboard =
+      data.dashboard || {};
+
+    const all =
+      dashboard.allTime || {};
+
+    const positions =
+      Array.isArray(
+        dashboard.openPositions
+      )
+        ? dashboard.openPositions
+        : [];
+
+
+    status.textContent =
+      "البوت يعمل";
+
+    status.className =
+      "";
+
+
+    document.getElementById(
+      "capitalTotal"
+    ).textContent =
+      usdc(
+        capital.total,
+        4
+      );
+
+
+    setPnl(
+      all.pnl
+    );
+
+
+    document.getElementById(
+      "openTrades"
+    ).textContent =
+      positions.length;
+
+
+    document.getElementById(
+      "totalTrades"
+    ).textContent =
+      number(
+        all.trades
+      );
+
+
+    document.getElementById(
+      "wins"
+    ).textContent =
+      number(
+        all.wins
+      );
+
+
+    document.getElementById(
+      "losses"
+    ).textContent =
+      number(
+        all.losses
+      );
+
+
+    document.getElementById(
+      "winRate"
+    ).textContent =
+      number(
+        all.winRate
+      ).toFixed(1) +
+      "%";
+
+
+    document.getElementById(
+      "available"
+    ).textContent =
+      usdc(
+        capital.availableForTrading,
+        4
+      );
+
+
+    document.getElementById(
+      "lastUpdate"
+    ).textContent =
+      new Date()
+        .toLocaleTimeString(
+          "ar-SA"
+        );
 
   }
   catch(error){
 
-    status.textContent=
-      "🔴 "+
-      (
-        error.message ||
-        "تعذر الاتصال"
-      );
+    status.textContent =
+      "تعذر الاتصال بالبوت";
 
-  }
-  finally{
-
-    button.disabled=false;
-
-    button.textContent=
-      "🔄 تحديث تحليل السوق الآن";
+    status.className =
+      "error";
   }
 }
 
 
-// =====================================
-// START
-// =====================================
-
-document.getElementById(
-  "refreshButton"
-).addEventListener(
-  "click",
-  refreshAnalysis
-);
-
-
-// تحديث تلقائي أول مرة
-
-refreshAnalysis();
-
-
-// تحديث كل 15 ثانية
+refresh();
 
 setInterval(
-  refreshAnalysis,
-  15000
+  refresh,
+  10000
 );
 
 </script>
