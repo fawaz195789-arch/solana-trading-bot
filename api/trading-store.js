@@ -1060,3 +1060,13 @@ export async function getTradingDashboard(
       total
   };
 }
+// نهاية الكود القديم
+
+
+
+// الكود الجديد يبدأ هنا
+// ======================================================
+// MARK POSITION FOR RECONCILIATION
+// ======================================================
+
+export async function markPositionForReconciliation({
