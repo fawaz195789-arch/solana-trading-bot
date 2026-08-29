@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Analyze and execute approved candidate
+      - name: Run full auto trading cycle
         env:
           AUTO_TRADER_SECRET: ${{ secrets.AUTO_TRADER_SECRET }}
 
@@ -27,95 +27,68 @@ jobs:
 
           BASE_URL="https://fawaz-ai-bot.vercel.app"
 
-          echo "Analyzing market..."
+          echo "Starting FAWAZ FULL AUTO trading cycle..."
 
-          ANALYSIS=$(curl \
+          RESPONSE=$(curl \
             --silent \
             --show-error \
             --fail-with-body \
             --connect-timeout 15 \
             --max-time 50 \
             --retry 2 \
+            --request POST \
+            -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+            -H "Content-Type: application/json" \
             -H "Accept: application/json" \
+            --data '{}' \
             "$BASE_URL/api/trade-orchestrator")
 
-          echo "$ANALYSIS" | jq .
+          echo "$RESPONSE" | jq .
 
-          STATUS=$(echo "$ANALYSIS" | jq -r '.status // "error"')
-          ENGINE=$(echo "$ANALYSIS" | jq -r '.engine // ""')
+          ENGINE=$(echo "$RESPONSE" | jq -r '.engine // ""')
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
+          EXECUTION=$(echo "$RESPONSE" | jq -r '.execution // ""')
+          EXECUTED=$(echo "$RESPONSE" | jq -r '.executed // false')
 
-          if [ "$STATUS" != "ok" ]; then
-            echo "Analysis failed."
-            exit 1
-          fi
-
-          if [ "$ENGINE" != "FAWAZ_LIVE_CANDIDATE_V1" ]; then
+          if [ "$ENGINE" != "FAWAZ_AUTO_TRADER_V2" ]; then
             echo "Wrong engine: $ENGINE"
             exit 1
           fi
 
-          # ============================================
-          # SELL FIRST
-          # ============================================
-
-          SELL_COUNT=$(echo "$ANALYSIS" | jq '.sellCandidates | length')
-
-          if [ "$SELL_COUNT" -gt 0 ]; then
-
-            SELL_SLOT=$(echo "$ANALYSIS" | jq -r '.sellCandidates[0].slotId')
-
-            echo "Approved SELL candidate found on Slot $SELL_SLOT"
-
-            curl \
-              --silent \
-              --show-error \
-              --fail-with-body \
-              --connect-timeout 15 \
-              --max-time 50 \
-              --retry 1 \
-              -X POST \
-              -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
-              -H "Content-Type: application/json" \
-              -H "Accept: application/json" \
-              --data "{
-                \"side\":\"SELL\",
-                \"slotId\":${SELL_SLOT}
-              }" \
-              "$BASE_URL/api/trade-orchestrator"
-
-            exit 0
+          if [ "$EXECUTION" != "FULL_AUTO" ]; then
+            echo "Wrong execution mode: $EXECUTION"
+            exit 1
           fi
 
-          # ============================================
-          # BUY
-          # ============================================
+          echo "Engine: $ENGINE"
+          echo "Status: $STATUS"
+          echo "Execution mode: $EXECUTION"
+          echo "Executed: $EXECUTED"
 
-          BUY_APPROVED=$(echo "$ANALYSIS" | jq -r '.buyCandidate.approved // false')
-
-          if [ "$BUY_APPROVED" = "true" ]; then
-
-            BUY_SLOT=$(echo "$ANALYSIS" | jq -r '.buyCandidate.slotId')
-
-            echo "Approved BUY candidate found on Slot $BUY_SLOT"
-
-            curl \
-              --silent \
-              --show-error \
-              --fail-with-body \
-              --connect-timeout 15 \
-              --max-time 50 \
-              --retry 1 \
-              -X POST \
-              -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
-              -H "Content-Type: application/json" \
-              -H "Accept: application/json" \
-              --data "{
-                \"side\":\"BUY\",
-                \"slotId\":${BUY_SLOT}
-              }" \
-              "$BASE_URL/api/trade-orchestrator"
-
-            exit 0
+          if [ "$STATUS" = "error" ]; then
+            echo "Trading cycle returned an error."
+            exit 1
           fi
 
-          echo "No approved trade candidate. Waiting for next cycle."
+          if [ "$EXECUTED" = "true" ]; then
+
+            SIDE=$(echo "$RESPONSE" | jq -r '.result.side // "-"')
+            SLOT=$(echo "$RESPONSE" | jq -r '.result.slotId // "-"')
+            SIGNATURE=$(echo "$RESPONSE" | jq -r '.result.signature // "-"')
+
+            echo "================================="
+            echo "REAL TRADE EXECUTED"
+            echo "Side: $SIDE"
+            echo "Slot: $SLOT"
+            echo "Signature: $SIGNATURE"
+            echo "================================="
+
+          else
+
+            ACTION=$(echo "$RESPONSE" | jq -r '.signal.action // "-"')
+            REASON=$(echo "$RESPONSE" | jq -r '.reason // "-"')
+
+            echo "No trade executed this cycle."
+            echo "Signal: $ACTION"
+            echo "Reason: $REASON"
+          fi
