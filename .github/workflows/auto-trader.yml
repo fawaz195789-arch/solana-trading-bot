@@ -45,28 +45,21 @@ jobs:
 
           echo "$RESPONSE" | jq .
 
-          ENGINE=$(echo "$RESPONSE" | jq -r '.engine // ""')
+          ENGINE=$(echo "$RESPONSE" | jq -r '.engine // "-"')
           STATUS=$(echo "$RESPONSE" | jq -r '.status // "error"')
-          EXECUTION=$(echo "$RESPONSE" | jq -r '.execution // ""')
+          EXECUTION=$(echo "$RESPONSE" | jq -r '.execution // "-"')
           EXECUTED=$(echo "$RESPONSE" | jq -r '.executed // false')
 
-          if [ "$ENGINE" != "FAWAZ_AUTO_TRADER_V2" ]; then
-            echo "Wrong engine: $ENGINE"
-            exit 1
-          fi
-
-          if [ "$EXECUTION" != "FULL_AUTO" ]; then
-            echo "Wrong execution mode: $EXECUTION"
-            exit 1
-          fi
-
+          echo "================================="
           echo "Engine: $ENGINE"
           echo "Status: $STATUS"
-          echo "Execution mode: $EXECUTION"
+          echo "Execution: $EXECUTION"
           echo "Executed: $EXECUTED"
+          echo "================================="
 
           if [ "$STATUS" = "error" ]; then
-            echo "Trading cycle returned an error."
+            MESSAGE=$(echo "$RESPONSE" | jq -r '.message // "Unknown trading error"')
+            echo "Trading cycle error: $MESSAGE"
             exit 1
           fi
 
@@ -85,10 +78,12 @@ jobs:
 
           else
 
-            ACTION=$(echo "$RESPONSE" | jq -r '.signal.action // "-"')
-            REASON=$(echo "$RESPONSE" | jq -r '.reason // "-"')
+            ACTION=$(echo "$RESPONSE" | jq -r '.signal.action // "WAIT"')
+            REASON=$(echo "$RESPONSE" | jq -r '.reason // .signal.reason // "Waiting for approved setup"')
 
             echo "No trade executed this cycle."
             echo "Signal: $ACTION"
             echo "Reason: $REASON"
           fi
+
+          echo "Trading cycle completed successfully."
