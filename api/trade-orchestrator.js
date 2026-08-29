@@ -1,17 +1,17 @@
 // /api/trade-orchestrator.js
 // FAWAZ AI BOT
-// FULL AUTO ORCHESTRATOR V3
+// FULL AUTO ORCHESTRATOR V4 LIVE
 //
 // GET  = LIVE ANALYSIS ONLY
 // POST = FULL AUTO REAL TRADING CYCLE
 //
 // Strategy:
-// MICRO DIP -> BUY -> TRAILING PROFIT -> SELL
+// MULTI ENTRY -> DYNAMIC SIZE -> NET PROFIT EXIT -> COMPOUND
 //
 // Capital:
 // Uses REAL on-chain USDC balance.
 // Keeps 20% reserve.
-// Up to 4 tracked positions.
+// Up to 4 independent tracked positions.
 // Profits are automatically available for future sizing.
 
 import crypto from "crypto";
@@ -29,51 +29,46 @@ import {
   closePosition,
   getRecentClosedTrades,
   getTradingDashboard,
-  updateHighestPrice,
-  activateTrailing
+  updateHighestPrice
 } from "./trading-store.js";
 
-
-// ======================================================
-// CONFIG
-// ======================================================
 
 const CONFIG = {
 
   maxSlots: 4,
 
-  // Keep 20% of tracked NAV as reserve
   reservePct: 0.20,
 
-  // Don't create microscopic slots
   minSlotUsd: 0.25,
 
-  // Soft profit target / trailing activation
+  weakEntryPct: 0.18,
+  normalEntryPct: 0.22,
+  strongEntryPct: 0.26,
+  veryStrongEntryPct: 0.30,
+
+  maxSingleEntryPctOfAvailable: 0.30,
+
+  minEntrySpacingBps: 12,
+
+  minAdditionalEntryConfidence: 48,
+
+  dipAddBelowLowestBps: 8,
+
   calmTargetBps: 30,
   normalTargetBps: 40,
   fastTargetBps: 55,
 
-  // Emergency loss protection
-  stopLossBps: 35,
+  // 18 bps = 0.18% estimated NET profit
+  minNetExitBps: 18,
 
-  // Minimum profit still accepted by trailing exit
-  minExitProfitBps: 12,
-
-  // Trailing distance
-  calmTrailingBps: 8,
-  normalTrailingBps: 10,
-  fastTrailingBps: 13,
-
-  // If price keeps running and never retraces
-  hardProfitExtraBps: 25,
+  // Emergency protection
+  stopLossBps: 40,
 
   maxSlippageBps: 30,
 
-  // Expected net edge before BUY
   minNetEdgeBps: 10,
 
-  // Safety allowance for route/network friction
-  executionBufferBps: 4
+  executionBufferBps: 6
 };
 
 
@@ -89,6 +84,7 @@ function num(
   value,
   fallback = 0
 ) {
+
   const n =
     Number(value);
 
@@ -103,6 +99,7 @@ function clamp(
   min,
   max
 ) {
+
   return Math.max(
     min,
     Math.min(
@@ -116,6 +113,7 @@ function clamp(
 function roundUsd(
   value
 ) {
+
   return Number(
     num(value)
       .toFixed(6)
@@ -126,6 +124,7 @@ function roundUsd(
 function toBps(
   value
 ) {
+
   return value * 10000;
 }
 
@@ -134,6 +133,7 @@ function atomicToAmount(
   value,
   decimals
 ) {
+
   return (
     num(value) /
     Math.pow(
@@ -178,14 +178,18 @@ function authorize(
 ) {
 
   const secret =
-    process.env.AUTO_TRADER_SECRET;
+    process.env
+      .AUTO_TRADER_SECRET;
 
 
   if (!secret) {
 
     return {
+
       ok: false,
+
       status: 500,
+
       reason:
         "AUTO_TRADER_SECRET_MISSING"
     };
@@ -204,8 +208,11 @@ function authorize(
   ) {
 
     return {
+
       ok: false,
+
       status: 401,
+
       reason:
         "UNAUTHORIZED"
     };
@@ -303,7 +310,6 @@ async function fetchJson(
       url,
       {
         ...options,
-
         cache:
           "no-store"
       }
@@ -325,8 +331,7 @@ async function fetchJson(
   } catch {
 
     data = {
-      raw:
-        text
+      raw: text
     };
   }
 
@@ -363,10 +368,12 @@ async function loadSignal(
     await fetchJson(
       `${baseUrl}/api/signal`,
       {
+
         method:
           "GET",
 
         headers: {
+
           Accept:
             "application/json"
         }
@@ -390,7 +397,7 @@ async function loadSignal(
 
 
 // ======================================================
-// LOAD REAL WALLET BALANCES
+// LOAD REAL WALLET
 // ======================================================
 
 async function loadWalletSnapshot(
@@ -405,10 +412,12 @@ async function loadWalletSnapshot(
     await fetchJson(
       `${baseUrl}/api/execution-agent?test=wallet`,
       {
+
         method:
           "GET",
 
         headers: {
+
           Accept:
             "application/json"
         }
@@ -417,10 +426,8 @@ async function loadWalletSnapshot(
 
 
   if (
-    data?.status !==
-      "ok" ||
-    data?.tradingKeyReady !==
-      true
+    data?.status !== "ok" ||
+    data?.tradingKeyReady !== true
   ) {
 
     throw new Error(
@@ -484,6 +491,7 @@ async function executeTrade({
   return await fetchJson(
     `${baseUrl}/api/execution-agent`,
     {
+
       method:
         "POST",
 
@@ -567,8 +575,7 @@ function getDynamicTarget(
 
 
   if (
-    riskMode ===
-      "FAST"
+    riskMode === "FAST"
   ) {
 
     target *=
@@ -577,8 +584,7 @@ function getDynamicTarget(
 
 
   if (
-    riskMode ===
-      "DEFENSIVE"
+    riskMode === "DEFENSIVE"
   ) {
 
     target *=
@@ -597,45 +603,7 @@ function getDynamicTarget(
 
 
 // ======================================================
-// TRAILING DISTANCE
-// ======================================================
-
-function getTrailingDistance(
-  signal
-) {
-
-  const mode =
-    String(
-      signal.marketMode ||
-      "CALM"
-    ).toUpperCase();
-
-
-  if (
-    mode === "FAST"
-  ) {
-
-    return CONFIG
-      .fastTrailingBps;
-  }
-
-
-  if (
-    mode === "NORMAL"
-  ) {
-
-    return CONFIG
-      .normalTrailingBps;
-  }
-
-
-  return CONFIG
-    .calmTrailingBps;
-}
-
-
-// ======================================================
-// REAL COMPOUND CAPITAL
+// REAL CAPITAL
 // ======================================================
 
 function calculateCapital({
@@ -653,13 +621,6 @@ function calculateCapital({
       )
     );
 
-
-  /*
-    Only tracked bot positions are counted here.
-
-    Random/manual SOL in the wallet is NOT
-    automatically sold by the bot.
-  */
 
   const trackedSolValue =
     positions.reduce(
@@ -696,38 +657,6 @@ function calculateCapital({
     CONFIG.reservePct;
 
 
-  const targetTradableCapital =
-    Math.max(
-      0,
-      trackedNav -
-      reserve
-    );
-
-
-  let dynamicSlotUsd =
-    targetTradableCapital /
-    CONFIG.maxSlots;
-
-
-  if (
-    dynamicSlotUsd > 0
-  ) {
-
-    dynamicSlotUsd =
-      Math.max(
-        CONFIG.minSlotUsd,
-        dynamicSlotUsd
-      );
-  }
-
-
-  /*
-    Reserve must remain as USDC.
-
-    This prevents the bot from slowly
-    consuming the entire wallet.
-  */
-
   const availableForTrading =
     Math.max(
       0,
@@ -756,14 +685,6 @@ function calculateCapital({
         trackedNav
       ),
 
-    slotSize:
-      roundUsd(
-        dynamicSlotUsd
-      ),
-
-    maxSlots:
-      CONFIG.maxSlots,
-
     reservePct:
       CONFIG.reservePct,
 
@@ -777,6 +698,9 @@ function calculateCapital({
         availableForTrading
       ),
 
+    maxSlots:
+      CONFIG.maxSlots,
+
     openPositions:
       positions.length,
 
@@ -787,7 +711,111 @@ function calculateCapital({
 
 
 // ======================================================
-// ESTIMATED EXECUTION COST
+// DYNAMIC ENTRY SIZE
+// ======================================================
+
+function getDynamicEntrySize({
+  availableUsdc,
+  confidence,
+  openPositions
+}) {
+
+  const available =
+    Math.max(
+      0,
+      num(
+        availableUsdc
+      )
+    );
+
+
+  if (
+    available <
+    CONFIG.minSlotUsd
+  ) {
+
+    return 0;
+  }
+
+
+  let pct =
+    CONFIG
+      .weakEntryPct;
+
+
+  if (
+    confidence >= 75
+  ) {
+
+    pct =
+      CONFIG
+        .veryStrongEntryPct;
+  }
+
+  else if (
+    confidence >= 68
+  ) {
+
+    pct =
+      CONFIG
+        .strongEntryPct;
+  }
+
+  else if (
+    confidence >= 58
+  ) {
+
+    pct =
+      CONFIG
+        .normalEntryPct;
+  }
+
+
+  if (
+    openPositions >= 2
+  ) {
+
+    pct *=
+      0.82;
+  }
+
+
+  if (
+    openPositions >= 3
+  ) {
+
+    pct *=
+      0.72;
+  }
+
+
+  pct =
+    Math.min(
+      pct,
+      CONFIG
+        .maxSingleEntryPctOfAvailable
+    );
+
+
+  const amount =
+    available *
+    pct;
+
+
+  return roundUsd(
+    Math.max(
+      CONFIG.minSlotUsd,
+      Math.min(
+        amount,
+        available
+      )
+    )
+  );
+}
+
+
+// ======================================================
+// COST ESTIMATE
 // ======================================================
 
 function estimateExecutionCosts(
@@ -814,15 +842,6 @@ function estimateExecutionCosts(
     );
 
 
-  /*
-    Conservative round-trip estimate:
-
-    spread
-    + BUY slippage
-    + SELL slippage
-    + small execution/network buffer
-  */
-
   const roundTripCostBps =
     spread +
     (
@@ -848,15 +867,343 @@ function estimateExecutionCosts(
 
 
 // ======================================================
+// SELL COST
+// ======================================================
+
+function estimateSellCostBps(
+  signal
+) {
+
+  const spreadBps =
+    Math.max(
+      0,
+      num(
+        signal?.spreadBps
+      )
+    );
+
+
+  const estimatedSlippageBps =
+    clamp(
+      Math.ceil(
+        spreadBps / 2 +
+        2
+      ),
+      4,
+      15
+    );
+
+
+  const estimatedSellCostBps =
+    estimatedSlippageBps +
+    (
+      spreadBps / 2
+    ) +
+    CONFIG
+      .executionBufferBps;
+
+
+  return {
+
+    spreadBps,
+
+    estimatedSlippageBps,
+
+    estimatedSellCostBps:
+      Number(
+        estimatedSellCostBps
+          .toFixed(2)
+      )
+  };
+}
+
+
+// ======================================================
+// MULTI ENTRY FILTER
+// ======================================================
+
+function evaluateMultiEntry({
+  positions = [],
+  signal
+}) {
+
+  const currentPrice =
+    num(
+      signal.currentPrice
+    );
+
+
+  if (
+    currentPrice <= 0
+  ) {
+
+    return {
+
+      allowed:
+        false,
+
+      reason:
+        "INVALID_MULTI_ENTRY_PRICE"
+    };
+  }
+
+
+  if (
+    positions.length === 0
+  ) {
+
+    return {
+
+      allowed:
+        true,
+
+      reason:
+        "FIRST_ENTRY",
+
+      entryNumber:
+        1,
+
+      nearestDistanceBps:
+        null
+    };
+  }
+
+
+  const entryPrices =
+    positions
+      .map(
+        position =>
+          num(
+            position
+              .entry_price
+          )
+      )
+      .filter(
+        price =>
+          price > 0
+      );
+
+
+  if (
+    entryPrices.length === 0
+  ) {
+
+    return {
+
+      allowed:
+        true,
+
+      reason:
+        "NO_VALID_EXISTING_ENTRY_PRICE",
+
+      entryNumber:
+        positions.length + 1
+    };
+  }
+
+
+  const distances =
+    entryPrices.map(
+      entryPrice =>
+
+        Math.abs(
+          (
+            currentPrice -
+            entryPrice
+          ) /
+          entryPrice
+        ) *
+        10000
+    );
+
+
+  const nearestDistanceBps =
+    Math.min(
+      ...distances
+    );
+
+
+  if (
+    nearestDistanceBps <
+    CONFIG
+      .minEntrySpacingBps
+  ) {
+
+    return {
+
+      allowed:
+        false,
+
+      reason:
+        "ENTRY_TOO_CLOSE_TO_EXISTING_POSITION",
+
+      nearestDistanceBps:
+        Number(
+          nearestDistanceBps
+            .toFixed(2)
+        ),
+
+      requiredDistanceBps:
+        CONFIG
+          .minEntrySpacingBps,
+
+      entryNumber:
+        positions.length + 1
+    };
+  }
+
+
+  const confidence =
+    num(
+      signal.confidence
+    );
+
+
+  if (
+    confidence <
+    CONFIG
+      .minAdditionalEntryConfidence
+  ) {
+
+    return {
+
+      allowed:
+        false,
+
+      reason:
+        "ADDITIONAL_ENTRY_CONFIDENCE_TOO_LOW",
+
+      confidence,
+
+      requiredConfidence:
+        CONFIG
+          .minAdditionalEntryConfidence,
+
+      nearestDistanceBps:
+        Number(
+          nearestDistanceBps
+            .toFixed(2)
+        ),
+
+      entryNumber:
+        positions.length + 1
+    };
+  }
+
+
+  const setup =
+    String(
+      signal.setup ||
+      ""
+    ).toUpperCase();
+
+
+  const isDipSetup =
+    setup.includes(
+      "DIP"
+    );
+
+
+  if (
+    isDipSetup
+  ) {
+
+    const lowestEntryPrice =
+      Math.min(
+        ...entryPrices
+      );
+
+
+    const belowLowestBps =
+      (
+        (
+          lowestEntryPrice -
+          currentPrice
+        ) /
+        lowestEntryPrice
+      ) *
+      10000;
+
+
+    if (
+      belowLowestBps <
+      CONFIG
+        .dipAddBelowLowestBps
+    ) {
+
+      return {
+
+        allowed:
+          false,
+
+        reason:
+          "WAIT_FOR_LOWER_DIP_ENTRY",
+
+        lowestEntryPrice,
+
+        currentPrice,
+
+        belowLowestBps:
+          Number(
+            belowLowestBps
+              .toFixed(2)
+          ),
+
+        requiredBelowBps:
+          CONFIG
+            .dipAddBelowLowestBps,
+
+        nearestDistanceBps:
+          Number(
+            nearestDistanceBps
+              .toFixed(2)
+          ),
+
+        entryNumber:
+          positions.length + 1
+      };
+    }
+  }
+
+
+  return {
+
+    allowed:
+      true,
+
+    reason:
+      "MULTI_ENTRY_PRICE_APPROVED",
+
+    nearestDistanceBps:
+      Number(
+        nearestDistanceBps
+          .toFixed(2)
+      ),
+
+    entryNumber:
+      positions.length + 1
+  };
+}
+
+
+// ======================================================
 // SELL CANDIDATES
 // ======================================================
 
 async function buildSellCandidates({
   positions,
-  currentPrice
+  currentPrice,
+  signal
 }) {
 
-  const candidates = [];
+  const candidates =
+    [];
+
+
+  const exitCosts =
+    estimateSellCostBps(
+      signal
+    );
 
 
   for (
@@ -866,7 +1213,8 @@ async function buildSellCandidates({
 
     const entryPrice =
       num(
-        position.entry_price
+        position
+          .entry_price
       );
 
 
@@ -878,7 +1226,7 @@ async function buildSellCandidates({
     }
 
 
-    const pnlBps =
+    const grossPnlBps =
       toBps(
         (
           currentPrice -
@@ -888,34 +1236,18 @@ async function buildSellCandidates({
       );
 
 
-    const targetBps =
-      Math.max(
-        1,
-        num(
-          position.target_bps,
-          CONFIG
-            .normalTargetBps
-        )
-      );
-
-
-    const trailingDistanceBps =
-      Math.max(
-        5,
-        num(
-          position
-            .trailing_distance_bps,
-          CONFIG
-            .normalTrailingBps
-        )
-      );
+    const netPnlBps =
+      grossPnlBps -
+      exitCosts
+        .estimatedSellCostBps;
 
 
     const oldHigh =
       Math.max(
         entryPrice,
         num(
-          position.highest_price,
+          position
+            .highest_price,
           entryPrice
         )
       );
@@ -927,10 +1259,6 @@ async function buildSellCandidates({
         currentPrice
       );
 
-
-    // ------------------------------------------
-    // SAVE NEW HIGH
-    // ------------------------------------------
 
     if (
       highestPrice >
@@ -947,71 +1275,13 @@ async function buildSellCandidates({
     }
 
 
-    let trailingActive =
-      position.trailing_active ===
-      true;
-
-
-    // ------------------------------------------
-    // ACTIVATE TRAILING
-    // ------------------------------------------
-
-    if (
-      !trailingActive &&
-      pnlBps >= targetBps
-    ) {
-
-      const activated =
-        await activateTrailing({
-
-          id:
-            position.id,
-
-          highestPrice
-        });
-
-
-      if (activated) {
-
-        trailingActive =
-          true;
-      }
-    }
-
-
-    // ------------------------------------------
-    // TRAILING STOP PRICE
-    // ------------------------------------------
-
-    const trailingStopPrice =
-      highestPrice *
-      (
-        1 -
-        (
-          trailingDistanceBps /
-          10000
-        )
-      );
-
-
-    const hardProfitBps =
-      targetBps +
-      CONFIG
-        .hardProfitExtraBps;
-
-
     let reason =
       null;
 
 
-    // ------------------------------------------
-    // STOP LOSS
-    // ------------------------------------------
-
     if (
-      pnlBps <=
-      -CONFIG
-        .stopLossBps
+      grossPnlBps <=
+      -CONFIG.stopLossBps
     ) {
 
       reason =
@@ -1019,38 +1289,13 @@ async function buildSellCandidates({
     }
 
 
-    // ------------------------------------------
-    // TRAILING PROFIT
-    // ------------------------------------------
-
     else if (
-      trailingActive &&
-      currentPrice <=
-        trailingStopPrice &&
-      pnlBps >=
-        CONFIG
-          .minExitProfitBps
+      netPnlBps >=
+      CONFIG.minNetExitBps
     ) {
 
       reason =
-        "TRAILING_PROFIT";
-    }
-
-
-    // ------------------------------------------
-    // HARD PROFIT EXIT
-    //
-    // Ensures very fast moves don't remain
-    // open forever waiting for retracement.
-    // ------------------------------------------
-
-    else if (
-      pnlBps >=
-      hardProfitBps
-    ) {
-
-      reason =
-        "HARD_PROFIT";
+        "NET_PROFIT_EXIT";
     }
 
 
@@ -1070,7 +1315,8 @@ async function buildSellCandidates({
 
       slotId:
         Number(
-          position.slot_id
+          position
+            .slot_id
         ),
 
       positionId:
@@ -1080,7 +1326,8 @@ async function buildSellCandidates({
 
       amountSol:
         num(
-          position.entry_sol
+          position
+            .entry_sol
         ),
 
       entryPrice,
@@ -1089,25 +1336,25 @@ async function buildSellCandidates({
 
       highestPrice,
 
-      pnlBps:
+      grossPnlBps:
         Number(
-          pnlBps
+          grossPnlBps
             .toFixed(2)
         ),
 
-      targetBps,
+      estimatedSellCostBps:
+        exitCosts
+          .estimatedSellCostBps,
 
-      trailingActive,
-
-      trailingDistanceBps,
-
-      trailingStopPrice:
+      netPnlBps:
         Number(
-          trailingStopPrice
-            .toFixed(8)
+          netPnlBps
+            .toFixed(2)
         ),
 
-      hardProfitBps,
+      minNetExitBps:
+        CONFIG
+          .minNetExitBps,
 
       reason,
 
@@ -1147,6 +1394,15 @@ async function buildBuyCandidate({
   }
 
 
+  if (
+    positions.length >=
+    CONFIG.maxSlots
+  ) {
+
+    return null;
+  }
+
+
   const freeSlot =
     await getFreeSlot(
       walletAddress,
@@ -1160,22 +1416,72 @@ async function buildBuyCandidate({
   }
 
 
-  /*
-    Never spend beyond REAL available USDC.
-  */
+  const multiEntry =
+    evaluateMultiEntry({
 
-  const slotUsd =
-    roundUsd(
-      Math.min(
-        capital.slotSize,
-        capital
-          .availableForTrading
-      )
-    );
+      positions,
+
+      signal
+    });
 
 
   if (
-    slotUsd <
+    !multiEntry.allowed
+  ) {
+
+    return {
+
+      candidateId:
+        crypto.randomUUID(),
+
+      side:
+        "BUY",
+
+      slotId:
+        freeSlot,
+
+      approved:
+        false,
+
+      reason:
+        multiEntry.reason,
+
+      multiEntry,
+
+      currentPrice:
+        num(
+          signal.currentPrice
+        ),
+
+      openPositions:
+        positions.length,
+
+      createdAt:
+        new Date()
+          .toISOString()
+    };
+  }
+
+
+  const amountUsd =
+    getDynamicEntrySize({
+
+      availableUsdc:
+        capital
+          .availableForTrading,
+
+      confidence:
+        num(
+          signal.confidence
+        ),
+
+      openPositions:
+        positions.length
+    });
+
+
+  if (
+    amountUsd <
     CONFIG.minSlotUsd
   ) {
 
@@ -1196,8 +1502,9 @@ async function buildBuyCandidate({
       reason:
         "INSUFFICIENT_REAL_USDC",
 
-      amountUsd:
-        slotUsd,
+      amountUsd,
+
+      multiEntry,
 
       createdAt:
         new Date()
@@ -1213,12 +1520,6 @@ async function buildBuyCandidate({
     );
 
 
-  const trailingDistanceBps =
-    getTrailingDistance(
-      signal
-    );
-
-
   const costs =
     estimateExecutionCosts(
       signal
@@ -1230,10 +1531,6 @@ async function buildBuyCandidate({
     costs
       .estimatedRoundTripCostBps;
 
-
-  // ------------------------------------------
-  // OUR OWN NET EDGE GUARD
-  // ------------------------------------------
 
   if (
     expectedNetEdgeBps <
@@ -1257,8 +1554,7 @@ async function buildBuyCandidate({
       reason:
         "EXPECTED_NET_EDGE_TOO_LOW",
 
-      amountUsd:
-        slotUsd,
+      amountUsd,
 
       targetBps,
 
@@ -1275,6 +1571,8 @@ async function buildBuyCandidate({
           expectedNetEdgeBps
             .toFixed(2)
         ),
+
+      multiEntry,
 
       createdAt:
         new Date()
@@ -1295,14 +1593,16 @@ async function buildBuyCandidate({
         position => ({
 
           id:
-            position.slot_id,
+            position
+              .slot_id,
 
           status:
             "OPEN",
 
           amountUsd:
             num(
-              position.entry_usdc
+              position
+                .entry_usdc
             )
         })
       )
@@ -1311,8 +1611,7 @@ async function buildBuyCandidate({
 
   const candidate = {
 
-    amountUsd:
-      slotUsd,
+    amountUsd,
 
     expectedMoveBps:
       targetBps,
@@ -1373,12 +1672,9 @@ async function buildBuyCandidate({
       reason:
         risk.reason,
 
-      amountUsd:
-        slotUsd,
+      amountUsd,
 
       targetBps,
-
-      trailingDistanceBps,
 
       estimatedSlippageBps:
         costs
@@ -1393,6 +1689,8 @@ async function buildBuyCandidate({
           expectedNetEdgeBps
             .toFixed(2)
         ),
+
+      multiEntry,
 
       risk,
 
@@ -1421,8 +1719,10 @@ async function buildBuyCandidate({
     approved:
       true,
 
-    amountUsd:
-      slotUsd,
+    entryNumber:
+      positions.length + 1,
+
+    amountUsd,
 
     currentPrice:
       num(
@@ -1439,8 +1739,6 @@ async function buildBuyCandidate({
       null,
 
     targetBps,
-
-    trailingDistanceBps,
 
     estimatedSlippageBps:
       costs
@@ -1461,6 +1759,8 @@ async function buildBuyCandidate({
         ?.netEdgeBps ??
       expectedNetEdgeBps,
 
+    multiEntry,
+
     reason:
       signal.reason ||
       "LIVE_BUY_SIGNAL",
@@ -1473,7 +1773,7 @@ async function buildBuyCandidate({
 
 
 // ======================================================
-// ANALYZE SYSTEM
+// ANALYZE
 // ======================================================
 
 async function analyzeSystem(
@@ -1550,7 +1850,9 @@ async function analyzeSystem(
   ) {
 
     signal.marketMode =
-      signalData.market.mode;
+      signalData
+        .market
+        .mode;
   }
 
 
@@ -1678,7 +1980,9 @@ async function analyzeSystem(
 
       positions,
 
-      currentPrice
+      currentPrice,
+
+      signal
     });
 
 
@@ -1710,7 +2014,7 @@ async function analyzeSystem(
 
 
 // ======================================================
-// EXECUTE BUY
+// REAL BUY
 // ======================================================
 
 async function executeApprovedBuy({
@@ -1725,8 +2029,7 @@ async function executeApprovedBuy({
 
   if (
     !candidate ||
-    candidate.approved !==
-      true
+    candidate.approved !== true
   ) {
 
     throw new Error(
@@ -1750,19 +2053,10 @@ async function executeApprovedBuy({
   }
 
 
-  /*
-    Recheck slot immediately before
-    spending real money.
-  */
-
   const existing =
     await getOpenPositionBySlot(
-
-      analysis
-        .walletAddress,
-
-      candidate
-        .slotId
+      analysis.walletAddress,
+      candidate.slotId
     );
 
 
@@ -1791,16 +2085,15 @@ async function executeApprovedBuy({
   }
 
 
-  /*
-    Do not allow stale analysis to spend
-    beyond current on-chain USDC snapshot.
-  */
+  const freshWallet =
+    await loadWalletSnapshot(
+      req
+    );
+
 
   if (
     amountUsd >
-    analysis
-      .walletSnapshot
-      .usdcBalance
+    freshWallet.usdcBalance
   ) {
 
     throw new Error(
@@ -1829,8 +2122,7 @@ async function executeApprovedBuy({
 
 
   if (
-    execution?.executed !==
-      true
+    execution?.executed !== true
   ) {
 
     return {
@@ -1883,8 +2175,7 @@ async function executeApprovedBuy({
     await openPosition({
 
       walletAddress:
-        analysis
-          .walletAddress,
+        analysis.walletAddress,
 
       slotId:
         candidate.slotId,
@@ -1902,14 +2193,13 @@ async function executeApprovedBuy({
         execution.signature,
 
       strategy:
-        "LIVE_MICRO_DIP_COMPOUND_V3",
+        "LIVE_FAST_COMPOUND_V4",
 
       targetBps:
         candidate.targetBps,
 
       trailingDistanceBps:
-        candidate
-          .trailingDistanceBps
+        null
     });
 
 
@@ -1924,18 +2214,14 @@ async function executeApprovedBuy({
     slotId:
       candidate.slotId,
 
+    entryNumber:
+      candidate.entryNumber,
+
     amountUsd,
 
     solReceived,
 
     actualEntryPrice,
-
-    targetBps:
-      candidate.targetBps,
-
-    trailingDistanceBps:
-      candidate
-        .trailingDistanceBps,
 
     signature:
       execution.signature,
@@ -1950,7 +2236,7 @@ async function executeApprovedBuy({
 
 
 // ======================================================
-// EXECUTE SELL
+// REAL SELL
 // ======================================================
 
 async function executeApprovedSell({
@@ -1972,7 +2258,8 @@ async function executeApprovedSell({
         item =>
           Number(
             item.slotId
-          ) === slotId
+          ) ===
+          slotId
       );
 
 
@@ -1986,10 +2273,7 @@ async function executeApprovedSell({
 
   const position =
     await getOpenPositionBySlot(
-
-      analysis
-        .walletAddress,
-
+      analysis.walletAddress,
       slotId
     );
 
@@ -2031,13 +2315,18 @@ async function executeApprovedSell({
       amountSol,
 
       slippageBps:
-        CONFIG.maxSlippageBps
+        clamp(
+          candidate
+            .estimatedSellCostBps,
+          4,
+          CONFIG
+            .maxSlippageBps
+        )
     });
 
 
   if (
-    execution?.executed !==
-      true
+    execution?.executed !== true
   ) {
 
     return {
@@ -2084,8 +2373,7 @@ async function executeApprovedSell({
     amountSol > 0
       ? usdcReceived /
         amountSol
-      : analysis
-          .currentPrice;
+      : analysis.currentPrice;
 
 
   const closed =
@@ -2124,6 +2412,12 @@ async function executeApprovedSell({
 
     actualExitPrice,
 
+    grossPnlBps:
+      candidate.grossPnlBps,
+
+    estimatedNetPnlBps:
+      candidate.netPnlBps,
+
     realizedPnl:
       num(
         closed
@@ -2153,7 +2447,6 @@ async function executeApprovedSell({
 
 // ======================================================
 // GET
-// ANALYSIS ONLY
 // ======================================================
 
 async function handleGet(
@@ -2177,10 +2470,10 @@ async function handleGet(
           "ok",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V3",
+          "FAWAZ_AUTO_TRADER_V4_LIVE",
 
         strategy:
-          "MICRO_DIP_TRAILING_COMPOUND",
+          "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
 
         liveMarket:
           true,
@@ -2195,26 +2488,10 @@ async function handleGet(
           true,
 
         walletAddress:
-          analysis
-            .walletAddress,
+          analysis.walletAddress,
 
-        wallet: {
-
-          source:
-            analysis
-              .walletSnapshot
-              .source,
-
-          solBalance:
-            analysis
-              .walletSnapshot
-              .solBalance,
-
-          usdcBalance:
-            analysis
-              .walletSnapshot
-              .usdcBalance
-        },
+        wallet:
+          analysis.walletSnapshot,
 
         capital:
           analysis.capital,
@@ -2253,8 +2530,7 @@ async function handleGet(
             null,
 
           currentPrice:
-            analysis
-              .currentPrice,
+            analysis.currentPrice,
 
           marketMode:
             analysis
@@ -2345,7 +2621,10 @@ async function handleGet(
           "error",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V3",
+          "FAWAZ_AUTO_TRADER_V4_LIVE",
+
+        liveMarket:
+          true,
 
         realTrading:
           true,
@@ -2367,7 +2646,6 @@ async function handleGet(
 
 // ======================================================
 // POST
-// FULL AUTO REAL TRADING
 // ======================================================
 
 async function handlePost(
@@ -2398,7 +2676,7 @@ async function handlePost(
           false,
 
         engine:
-          "FAWAZ_AUTO_TRADER_V3",
+          "FAWAZ_AUTO_TRADER_V4_LIVE",
 
         message:
           auth.reason
@@ -2418,10 +2696,6 @@ async function handlePost(
       null;
 
 
-    // ==================================================
-    // SELL ALWAYS HAS PRIORITY
-    // ==================================================
-
     if (
       Array.isArray(
         analysis.sellCandidates
@@ -2431,25 +2705,13 @@ async function handlePost(
         .length > 0
     ) {
 
-      /*
-        If several exits trigger together,
-        process the most urgent one first.
-
-        Stop loss has priority,
-        then trailing,
-        then hard profit.
-      */
-
       const priority = {
 
         STOP_LOSS:
           1,
 
-        TRAILING_PROFIT:
-          2,
-
-        HARD_PROFIT:
-          3
+        NET_PROFIT_EXIT:
+          2
       };
 
 
@@ -2492,15 +2754,10 @@ async function handlePost(
           analysis,
 
           requestedSlotId:
-            sellCandidate
-              .slotId
+            sellCandidate.slotId
         });
     }
 
-
-    // ==================================================
-    // OTHERWISE BUY
-    // ==================================================
 
     else if (
       analysis.buyCandidate &&
@@ -2524,16 +2781,11 @@ async function handlePost(
     }
 
 
-    // ==================================================
-    // NOTHING TO EXECUTE
-    // ==================================================
-
     else {
 
       const dashboard =
         await getTradingDashboard(
-          analysis
-            .walletAddress
+          analysis.walletAddress
         );
 
 
@@ -2545,10 +2797,10 @@ async function handlePost(
             "waiting",
 
           engine:
-            "FAWAZ_AUTO_TRADER_V3",
+            "FAWAZ_AUTO_TRADER_V4_LIVE",
 
           strategy:
-            "MICRO_DIP_TRAILING_COMPOUND",
+            "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
 
           liveMarket:
             true,
@@ -2575,12 +2827,10 @@ async function handlePost(
             "NO_APPROVED_TRADE",
 
           wallet:
-            analysis
-              .walletSnapshot,
+            analysis.walletSnapshot,
 
           capital:
-            analysis
-              .capital,
+            analysis.capital,
 
           signal: {
 
@@ -2604,8 +2854,7 @@ async function handlePost(
               null,
 
             currentPrice:
-              analysis
-                .currentPrice,
+              analysis.currentPrice,
 
             marketMode:
               analysis
@@ -2621,12 +2870,10 @@ async function handlePost(
           },
 
           buyCandidate:
-            analysis
-              .buyCandidate,
+            analysis.buyCandidate,
 
           sellCandidates:
-            analysis
-              .sellCandidates,
+            analysis.sellCandidates,
 
           dashboard,
 
@@ -2637,14 +2884,9 @@ async function handlePost(
     }
 
 
-    // ==================================================
-    // AFTER EXECUTION
-    // ==================================================
-
     const dashboard =
       await getTradingDashboard(
-        analysis
-          .walletAddress
+        analysis.walletAddress
       );
 
 
@@ -2653,16 +2895,15 @@ async function handlePost(
       .json({
 
         status:
-          result?.executed ===
-            true
+          result?.executed === true
             ? "ok"
             : "blocked",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V3",
+          "FAWAZ_AUTO_TRADER_V4_LIVE",
 
         strategy:
-          "MICRO_DIP_TRAILING_COMPOUND",
+          "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
 
         liveMarket:
           true,
@@ -2677,8 +2918,7 @@ async function handlePost(
           true,
 
         executed:
-          result?.executed ===
-            true,
+          result?.executed === true,
 
         result,
 
@@ -2706,7 +2946,10 @@ async function handlePost(
           "error",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V3",
+          "FAWAZ_AUTO_TRADER_V4_LIVE",
+
+        strategy:
+          "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
 
         liveMarket:
           true,
@@ -2736,7 +2979,7 @@ async function handlePost(
 
 
 // ======================================================
-// MAIN HANDLER
+// MAIN
 // ======================================================
 
 export default async function handler(
@@ -2745,8 +2988,7 @@ export default async function handler(
 ) {
 
   if (
-    req.method ===
-      "GET"
+    req.method === "GET"
   ) {
 
     return handleGet(
@@ -2757,8 +2999,7 @@ export default async function handler(
 
 
   if (
-    req.method ===
-      "POST"
+    req.method === "POST"
   ) {
 
     return handlePost(
@@ -2776,7 +3017,7 @@ export default async function handler(
         "error",
 
       engine:
-        "FAWAZ_AUTO_TRADER_V3",
+        "FAWAZ_AUTO_TRADER_V4_LIVE",
 
       message:
         "GET or POST only"
