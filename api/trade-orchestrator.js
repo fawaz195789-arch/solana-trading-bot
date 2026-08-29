@@ -4947,9 +4947,8 @@ export default async function handler(
       status:
         "error",
 
-      engine:
-        "FAWAZ_WHALE_INTELLIGENCE_V1",
-
+engine:
+  "FAWAZ_WHALE_PREDICTIVE_V1",
       message:
         "GET or POST only"
     });
