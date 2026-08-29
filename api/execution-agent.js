@@ -1,8 +1,9 @@
 // /api/execution-agent.js
 // FAWAZ AI BOT
 // Execution Agent v4
-// Real Jupiter Swap Execution
-// Compatible with Parallel Micro Scalper Slots
+//
+// GET  = Wallet/key connection test only
+// POST = Real Jupiter Swap Execution
 
 import {
   Connection,
@@ -52,7 +53,6 @@ const JUPITER_SWAP_URL =
 // ======================================================
 
 const ABSOLUTE_MAX_SLIPPAGE_BPS = 30;
-
 const MAX_PRICE_IMPACT_PCT = 0.003;
 
 
@@ -124,8 +124,7 @@ function authorize(req) {
 
 function loadBotKeypair() {
   const raw =
-    process.env
-      .BOT_SOLANA_PRIVATE_KEY;
+    process.env.BOT_SOLANA_PRIVATE_KEY;
 
   if (!raw) {
     throw new Error(
@@ -137,9 +136,6 @@ function loadBotKeypair() {
     raw.trim();
 
   try {
-    // ----------------------------------
-    // JSON ARRAY
-    // ----------------------------------
 
     if (
       value.startsWith("[") &&
@@ -163,10 +159,6 @@ function loadBotKeypair() {
         secret
       );
     }
-
-    // ----------------------------------
-    // BASE58
-    // ----------------------------------
 
     const secret =
       bs58.decode(value);
@@ -211,8 +203,7 @@ function verifyWalletMatchesKeypair(
   keypair
 ) {
   const botAddress =
-    keypair.publicKey
-      .toString();
+    keypair.publicKey.toString();
 
   const configuredWallet =
     getConfiguredWalletAddress();
@@ -227,6 +218,146 @@ function verifyWalletMatchesKeypair(
   }
 
   return botAddress;
+}
+
+
+// ======================================================
+// WALLET CONNECTION TEST
+// NO TRADE / NO TRANSACTION
+// ======================================================
+
+async function handleWalletTest(
+  req,
+  res
+) {
+  try {
+
+    const keypair =
+      loadBotKeypair();
+
+    const derivedAddress =
+      keypair.publicKey.toString();
+
+    const configuredWallet =
+      getConfiguredWalletAddress();
+
+    const walletMatch =
+      !configuredWallet ||
+      configuredWallet ===
+        derivedAddress;
+
+    if (!walletMatch) {
+      return res
+        .status(500)
+        .json({
+          status:
+            "error",
+
+          test:
+            "WALLET_CONNECTION",
+
+          executed:
+            false,
+
+          keyLoaded:
+            true,
+
+          walletMatch:
+            false,
+
+          configuredWallet:
+            configuredWallet,
+
+          derivedWallet:
+            derivedAddress,
+
+          message:
+            "Private key does not match configured wallet"
+        });
+    }
+
+
+    // Test RPC connection too
+    const connection =
+      new Connection(
+        RPC_URL,
+        "confirmed"
+      );
+
+    const balanceLamports =
+      await connection.getBalance(
+        keypair.publicKey
+      );
+
+    const solBalance =
+      balanceLamports /
+      1_000_000_000;
+
+
+    return res
+      .status(200)
+      .json({
+        status:
+          "ok",
+
+        test:
+          "WALLET_CONNECTION",
+
+        executed:
+          false,
+
+        keyLoaded:
+          true,
+
+        keyValid:
+          true,
+
+        walletMatch:
+          true,
+
+        rpcConnected:
+          true,
+
+        walletAddress:
+          derivedAddress,
+
+        solBalance,
+
+        tradingKeyReady:
+          true,
+
+        message:
+          "Bot wallet key is loaded and matches the configured wallet. No trade was executed."
+      });
+
+  } catch (error) {
+
+    return res
+      .status(500)
+      .json({
+        status:
+          "error",
+
+        test:
+          "WALLET_CONNECTION",
+
+        executed:
+          false,
+
+        keyLoaded:
+          false,
+
+        walletMatch:
+          false,
+
+        tradingKeyReady:
+          false,
+
+        message:
+          error?.message ||
+          "Wallet connection test failed"
+      });
+  }
 }
 
 
@@ -366,9 +497,7 @@ async function getJupiterQuote({
       amount:
         atomicAmount,
       slippageBps:
-        String(
-          slippageBps
-        )
+        String(slippageBps)
     });
 
   const response =
@@ -493,7 +622,43 @@ export default async function handler(
 ) {
 
   // ==================================================
-  // POST ONLY
+  // GET = SAFE WALLET TEST
+  // ==================================================
+
+  if (
+    req.method === "GET"
+  ) {
+
+    if (
+      req.query?.test !==
+      "wallet"
+    ) {
+      return res
+        .status(200)
+        .json({
+          status:
+            "ok",
+
+          engine:
+            "FAWAZ_EXECUTION_AGENT_V4",
+
+          executed:
+            false,
+
+          message:
+            "Use ?test=wallet to test wallet connection"
+        });
+    }
+
+    return handleWalletTest(
+      req,
+      res
+    );
+  }
+
+
+  // ==================================================
+  // POST ONLY FOR REAL TRADING
   // ==================================================
 
   if (
@@ -509,7 +674,7 @@ export default async function handler(
           false,
 
         message:
-          "POST only"
+          "GET or POST only"
       });
   }
 
@@ -540,10 +705,6 @@ export default async function handler(
 
 
   try {
-
-    // ==================================================
-    // PARSE REQUEST
-    // ==================================================
 
     const trade =
       parseTradeRequest(
@@ -613,26 +774,17 @@ export default async function handler(
 
 
     // ==================================================
-    // LOAD KEYPAIR
+    // LOAD + VERIFY KEYPAIR
     // ==================================================
 
     const keypair =
       loadBotKeypair();
-
-
-    // ==================================================
-    // VERIFY WALLET ADDRESS
-    // ==================================================
 
     const botAddress =
       verifyWalletMatchesKeypair(
         keypair
       );
 
-
-    // ==================================================
-    // DEFINE SWAP
-    // ==================================================
 
     let inputMint;
     let outputMint;
@@ -669,7 +821,6 @@ export default async function handler(
               "BUY requires valid amountUsd"
           });
       }
-
 
       inputMint =
         USDC_MINT;
@@ -721,7 +872,6 @@ export default async function handler(
           });
       }
 
-
       inputMint =
         SOL_MINT;
 
@@ -761,7 +911,6 @@ export default async function handler(
         quote.priceImpactPct,
         0
       );
-
 
     if (
       Math.abs(
@@ -806,16 +955,14 @@ export default async function handler(
 
 
     // ==================================================
-    // DESERIALIZE TRANSACTION
+    // DESERIALIZE
     // ==================================================
 
     const transactionBuffer =
       Buffer.from(
-        swapData
-          .swapTransaction,
+        swapData.swapTransaction,
         "base64"
       );
-
 
     const transaction =
       VersionedTransaction
@@ -825,7 +972,7 @@ export default async function handler(
 
 
     // ==================================================
-    // SIGN TRANSACTION
+    // SIGN
     // ==================================================
 
     transaction.sign([
@@ -845,14 +992,13 @@ export default async function handler(
 
 
     // ==================================================
-    // SEND TRANSACTION
+    // SEND
     // ==================================================
 
     const signature =
       await connection
         .sendRawTransaction(
-          transaction
-            .serialize(),
+          transaction.serialize(),
           {
             skipPreflight:
               false,
@@ -864,12 +1010,11 @@ export default async function handler(
 
 
     // ==================================================
-    // CONFIRM TRANSACTION
+    // CONFIRM
     // ==================================================
 
     if (
-      swapData
-        .lastValidBlockHeight
+      swapData.lastValidBlockHeight
     ) {
 
       await connection
@@ -886,7 +1031,6 @@ export default async function handler(
               swapData
                 .lastValidBlockHeight
           },
-
           "confirmed"
         );
 
@@ -973,7 +1117,6 @@ export default async function handler(
       "Execution Agent Error:",
       error
     );
-
 
     return res
       .status(500)
