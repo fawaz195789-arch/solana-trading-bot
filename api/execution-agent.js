@@ -1,8 +1,8 @@
 // /api/execution-agent.js
 // FAWAZ AI BOT
-// Execution Agent v5
+// Execution Agent v6
 //
-// GET  = Wallet connection test
+// GET  = Wallet connection + real SOL/USDC balances
 // POST = Real Jupiter Swap Execution
 //
 // IMPORTANT:
@@ -11,7 +11,8 @@
 import {
   Connection,
   Keypair,
-  VersionedTransaction
+  VersionedTransaction,
+  PublicKey
 } from "@solana/web3.js";
 
 import bs58 from "bs58";
@@ -124,9 +125,6 @@ function authorize(req) {
 
 // ======================================================
 // PRIVATE KEY
-// Supports:
-// 1) Base58
-// 2) JSON byte array
 // ======================================================
 
 function loadBotKeypair() {
@@ -144,7 +142,6 @@ function loadBotKeypair() {
 
   try {
 
-    // JSON ARRAY
     if (
       value.startsWith("[") &&
       value.endsWith("]")
@@ -171,8 +168,6 @@ function loadBotKeypair() {
       );
     }
 
-
-    // BASE58
     const secret =
       bs58.decode(value);
 
@@ -215,8 +210,7 @@ function verifyWalletMatchesKeypair(
 ) {
 
   const botAddress =
-    keypair.publicKey
-      .toString();
+    keypair.publicKey.toString();
 
   const configuredWallet =
     getConfiguredWalletAddress();
@@ -235,7 +229,97 @@ function verifyWalletMatchesKeypair(
 
 
 // ======================================================
-// SAFE WALLET TEST
+// SAFE NUMBER
+// ======================================================
+
+function safeNumber(
+  value,
+  fallback = 0
+) {
+
+  const number =
+    Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : fallback;
+}
+
+
+// ======================================================
+// REAL USDC BALANCE
+// ======================================================
+
+async function getRealUsdcBalance(
+  connection,
+  ownerPublicKey
+) {
+
+  const mint =
+    new PublicKey(
+      USDC_MINT
+    );
+
+  const tokenAccounts =
+    await connection
+      .getParsedTokenAccountsByOwner(
+        ownerPublicKey,
+        {
+          mint
+        },
+        "confirmed"
+      );
+
+  let totalUsdc = 0;
+
+  for (
+    const item
+    of tokenAccounts.value
+  ) {
+
+    const tokenAmount =
+      item
+        ?.account
+        ?.data
+        ?.parsed
+        ?.info
+        ?.tokenAmount;
+
+    if (!tokenAmount) {
+      continue;
+    }
+
+    const amount =
+      Number(
+        tokenAmount.amount
+      );
+
+    const decimals =
+      Number(
+        tokenAmount.decimals
+      );
+
+    if (
+      Number.isFinite(amount) &&
+      Number.isFinite(decimals)
+    ) {
+
+      totalUsdc +=
+        amount /
+        Math.pow(
+          10,
+          decimals
+        );
+    }
+  }
+
+  return totalUsdc;
+}
+
+
+// ======================================================
+// WALLET TEST
+// REAL SOL + USDC
 // NO TRADE
 // ======================================================
 
@@ -243,6 +327,7 @@ async function handleWalletTest(
   req,
   res
 ) {
+
   try {
 
     const keypair =
@@ -262,9 +347,11 @@ async function handleWalletTest(
 
 
     if (!walletMatch) {
+
       return res
         .status(500)
         .json({
+
           status:
             "error",
 
@@ -304,15 +391,30 @@ async function handleWalletTest(
       );
 
 
-    const balanceLamports =
-      await connection.getBalance(
-        keypair.publicKey
-      );
+    const [
+      balanceLamports,
+      usdcBalance
+    ] =
+      await Promise.all([
+
+        connection.getBalance(
+          keypair.publicKey
+        ),
+
+        getRealUsdcBalance(
+          connection,
+          keypair.publicKey
+        )
+
+      ]);
 
 
     const solBalance =
       balanceLamports /
-      1_000_000_000;
+      Math.pow(
+        10,
+        SOL_DECIMALS
+      );
 
 
     return res
@@ -324,6 +426,12 @@ async function handleWalletTest(
 
         test:
           "WALLET_CONNECTION",
+
+        source:
+          "SOLANA_MAINNET",
+
+        balancesSource:
+          "ON_CHAIN",
 
         executed:
           false,
@@ -343,13 +451,38 @@ async function handleWalletTest(
         walletAddress:
           derivedAddress,
 
-        solBalance,
+        solBalance:
+          Number(
+            solBalance.toFixed(9)
+          ),
+
+        usdcBalance:
+          Number(
+            usdcBalance.toFixed(6)
+          ),
+
+        balances: {
+
+          sol:
+            Number(
+              solBalance.toFixed(9)
+            ),
+
+          usdc:
+            Number(
+              usdcBalance.toFixed(6)
+            )
+        },
 
         tradingKeyReady:
           true,
 
+        timestamp:
+          new Date()
+            .toISOString(),
+
         message:
-          "Bot wallet key is loaded and ready. No trade was executed."
+          "Bot wallet is connected. Real SOL and USDC balances loaded from Solana. No trade was executed."
       });
 
 
@@ -380,34 +513,21 @@ async function handleWalletTest(
         walletMatch:
           false,
 
+        rpcConnected:
+          false,
+
         tradingKeyReady:
           false,
 
         message:
           error?.message ||
-          "Wallet connection test failed"
+          "Wallet connection test failed",
+
+        timestamp:
+          new Date()
+            .toISOString()
       });
   }
-}
-
-
-// ======================================================
-// SAFE NUMBER
-// ======================================================
-
-function safeNumber(
-  value,
-  fallback = 0
-) {
-
-  const number =
-    Number(value);
-
-  return Number.isFinite(
-    number
-  )
-    ? number
-    : fallback;
 }
 
 
@@ -424,9 +544,7 @@ function toAtomicAmount(
     Number(amount);
 
   if (
-    !Number.isFinite(
-      numeric
-    ) ||
+    !Number.isFinite(numeric) ||
     numeric <= 0
   ) {
     throw new Error(
@@ -549,11 +667,9 @@ async function getJupiterQuote({
           slippageBps
         ),
 
-      // Restrict odd/illiquid routing intermediates
       restrictIntermediateTokens:
         "true",
 
-      // Still allow Jupiter to choose a usable route
       onlyDirectRoutes:
         "false",
 
@@ -613,6 +729,7 @@ async function getJupiterQuote({
     ) ||
     data.routePlan.length === 0
   ) {
+
     throw new Error(
       "JUPITER_NO_ROUTE"
     );
@@ -657,7 +774,6 @@ async function buildSwap({
             dynamicComputeUnitLimit:
               true,
 
-            // Jupiter dynamically adapts slippage
             dynamicSlippage:
               true,
 
@@ -723,7 +839,7 @@ export default async function handler(
 ) {
 
   // ==================================================
-  // GET = SAFE WALLET TEST
+  // GET = WALLET TEST
   // ==================================================
 
   if (
@@ -750,13 +866,13 @@ export default async function handler(
           "ok",
 
         engine:
-          "FAWAZ_EXECUTION_AGENT_V5",
+          "FAWAZ_EXECUTION_AGENT_V6",
 
         executed:
           false,
 
         message:
-          "Use ?test=wallet for wallet connection test"
+          "Use ?test=wallet for wallet connection and real balances"
       });
   }
 
@@ -817,10 +933,6 @@ export default async function handler(
 
   try {
 
-    // ==================================================
-    // PARSE REQUEST
-    // ==================================================
-
     const trade =
       parseTradeRequest(
         req.body || {}
@@ -837,7 +949,7 @@ export default async function handler(
 
 
     // ==================================================
-    // WAIT / HOLD
+    // WAIT
     // ==================================================
 
     if (
@@ -907,16 +1019,9 @@ export default async function handler(
       );
 
 
-    // ==================================================
-    // SWAP PARAMETERS
-    // ==================================================
-
     let inputMint;
-
     let outputMint;
-
     let atomicAmount;
-
     let humanAmount;
 
 
@@ -1041,7 +1146,7 @@ export default async function handler(
 
 
     // ==================================================
-    // PRICE IMPACT CHECK
+    // PRICE IMPACT
     // ==================================================
 
     const priceImpactPct =
@@ -1125,7 +1230,7 @@ export default async function handler(
 
 
     // ==================================================
-    // SOLANA CONNECTION
+    // CONNECTION
     // ==================================================
 
     const connection =
@@ -1136,7 +1241,7 @@ export default async function handler(
 
 
     // ==================================================
-    // SEND TRANSACTION
+    // SEND
     // ==================================================
 
     let signature;
@@ -1185,7 +1290,7 @@ export default async function handler(
 
 
     // ==================================================
-    // CONFIRM TRANSACTION
+    // CONFIRM
     // ==================================================
 
     if (
@@ -1240,7 +1345,7 @@ export default async function handler(
           true,
 
         engine:
-          "FAWAZ_EXECUTION_AGENT_V5",
+          "FAWAZ_EXECUTION_AGENT_V6",
 
         slotId,
 
@@ -1315,7 +1420,7 @@ export default async function handler(
           false,
 
         engine:
-          "FAWAZ_EXECUTION_AGENT_V5",
+          "FAWAZ_EXECUTION_AGENT_V6",
 
         message:
           error?.message ||
