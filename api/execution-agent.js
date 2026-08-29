@@ -1,9 +1,12 @@
 // /api/execution-agent.js
 // FAWAZ AI BOT
-// STABLE EXECUTION AGENT
+// Execution Agent v5
 //
 // GET  = Wallet connection test
 // POST = Real Jupiter Swap Execution
+//
+// IMPORTANT:
+// Real transactions are signed by BOT_SOLANA_PRIVATE_KEY
 
 import {
   Connection,
@@ -53,6 +56,8 @@ const JUPITER_SWAP_URL =
 // ======================================================
 
 const ABSOLUTE_MAX_SLIPPAGE_BPS = 30;
+
+// 0.003 = 0.3%
 const MAX_PRICE_IMPACT_PCT = 0.003;
 
 
@@ -66,7 +71,9 @@ function jupiterHeaders() {
     Accept: "application/json"
   };
 
-  if (process.env.JUPITER_API_KEY) {
+  if (
+    process.env.JUPITER_API_KEY
+  ) {
     headers["x-api-key"] =
       process.env.JUPITER_API_KEY;
   }
@@ -76,7 +83,7 @@ function jupiterHeaders() {
 
 
 // ======================================================
-// AUTH
+// AUTHORIZATION
 // ======================================================
 
 function authorize(req) {
@@ -117,6 +124,9 @@ function authorize(req) {
 
 // ======================================================
 // PRIVATE KEY
+// Supports:
+// 1) Base58
+// 2) JSON byte array
 // ======================================================
 
 function loadBotKeypair() {
@@ -134,21 +144,35 @@ function loadBotKeypair() {
 
   try {
 
+    // JSON ARRAY
     if (
       value.startsWith("[") &&
       value.endsWith("]")
     ) {
+
       const parsed =
         JSON.parse(value);
 
+      if (
+        !Array.isArray(parsed)
+      ) {
+        throw new Error(
+          "PRIVATE_KEY_JSON_NOT_ARRAY"
+        );
+      }
+
       const secret =
-        Uint8Array.from(parsed);
+        Uint8Array.from(
+          parsed
+        );
 
       return Keypair.fromSecretKey(
         secret
       );
     }
 
+
+    // BASE58
     const secret =
       bs58.decode(value);
 
@@ -189,8 +213,10 @@ function getConfiguredWalletAddress() {
 function verifyWalletMatchesKeypair(
   keypair
 ) {
+
   const botAddress =
-    keypair.publicKey.toString();
+    keypair.publicKey
+      .toString();
 
   const configuredWallet =
     getConfiguredWalletAddress();
@@ -210,6 +236,7 @@ function verifyWalletMatchesKeypair(
 
 // ======================================================
 // SAFE WALLET TEST
+// NO TRADE
 // ======================================================
 
 async function handleWalletTest(
@@ -222,7 +249,8 @@ async function handleWalletTest(
       loadBotKeypair();
 
     const derivedAddress =
-      keypair.publicKey.toString();
+      keypair.publicKey
+        .toString();
 
     const configuredWallet =
       getConfiguredWalletAddress();
@@ -232,24 +260,42 @@ async function handleWalletTest(
       configuredWallet ===
         derivedAddress;
 
+
     if (!walletMatch) {
       return res
         .status(500)
         .json({
-          status: "error",
-          test: "WALLET_CONNECTION",
-          executed: false,
-          keyLoaded: true,
-          keyValid: true,
-          walletMatch: false,
+          status:
+            "error",
+
+          test:
+            "WALLET_CONNECTION",
+
+          executed:
+            false,
+
+          keyLoaded:
+            true,
+
+          keyValid:
+            true,
+
+          walletMatch:
+            false,
+
           configuredWallet,
+
           derivedWallet:
             derivedAddress,
-          tradingKeyReady: false,
+
+          tradingKeyReady:
+            false,
+
           message:
             "Private key does not match configured wallet"
         });
     }
+
 
     const connection =
       new Connection(
@@ -257,32 +303,55 @@ async function handleWalletTest(
         "confirmed"
       );
 
+
     const balanceLamports =
       await connection.getBalance(
         keypair.publicKey
       );
 
+
     const solBalance =
       balanceLamports /
       1_000_000_000;
 
+
     return res
       .status(200)
       .json({
-        status: "ok",
-        test: "WALLET_CONNECTION",
-        executed: false,
-        keyLoaded: true,
-        keyValid: true,
-        walletMatch: true,
-        rpcConnected: true,
+
+        status:
+          "ok",
+
+        test:
+          "WALLET_CONNECTION",
+
+        executed:
+          false,
+
+        keyLoaded:
+          true,
+
+        keyValid:
+          true,
+
+        walletMatch:
+          true,
+
+        rpcConnected:
+          true,
+
         walletAddress:
           derivedAddress,
+
         solBalance,
-        tradingKeyReady: true,
+
+        tradingKeyReady:
+          true,
+
         message:
           "Bot wallet key is loaded and ready. No trade was executed."
       });
+
 
   } catch (error) {
 
@@ -291,15 +360,29 @@ async function handleWalletTest(
       error
     );
 
+
     return res
       .status(500)
       .json({
-        status: "error",
-        test: "WALLET_CONNECTION",
-        executed: false,
-        keyLoaded: false,
-        walletMatch: false,
-        tradingKeyReady: false,
+
+        status:
+          "error",
+
+        test:
+          "WALLET_CONNECTION",
+
+        executed:
+          false,
+
+        keyLoaded:
+          false,
+
+        walletMatch:
+          false,
+
+        tradingKeyReady:
+          false,
+
         message:
           error?.message ||
           "Wallet connection test failed"
@@ -309,31 +392,41 @@ async function handleWalletTest(
 
 
 // ======================================================
-// HELPERS
+// SAFE NUMBER
 // ======================================================
 
 function safeNumber(
   value,
   fallback = 0
 ) {
-  const n =
+
+  const number =
     Number(value);
 
-  return Number.isFinite(n)
-    ? n
+  return Number.isFinite(
+    number
+  )
+    ? number
     : fallback;
 }
 
+
+// ======================================================
+// TO ATOMIC AMOUNT
+// ======================================================
 
 function toAtomicAmount(
   amount,
   decimals
 ) {
+
   const numeric =
     Number(amount);
 
   if (
-    !Number.isFinite(numeric) ||
+    !Number.isFinite(
+      numeric
+    ) ||
     numeric <= 0
   ) {
     throw new Error(
@@ -352,12 +445,13 @@ function toAtomicAmount(
 
 
 // ======================================================
-// PARSE REQUEST
+// PARSE TRADE REQUEST
 // ======================================================
 
 function parseTradeRequest(
   body = {}
 ) {
+
   const side =
     String(
       body.side ||
@@ -365,13 +459,17 @@ function parseTradeRequest(
       ""
     ).toUpperCase();
 
+
   const slotId =
     body.slotId ??
     null;
 
+
   const amountUsd =
     safeNumber(
+
       body.amountUsd,
+
       side === "BUY"
         ? safeNumber(
             body.amount,
@@ -380,10 +478,13 @@ function parseTradeRequest(
         : 0
     );
 
+
   const amountSol =
     safeNumber(
+
       body.amountSol ??
       body.quantity,
+
       side === "SELL"
         ? safeNumber(
             body.amount,
@@ -392,11 +493,13 @@ function parseTradeRequest(
         : 0
     );
 
+
   let slippageBps =
     safeNumber(
       body.slippageBps,
       20
     );
+
 
   slippageBps =
     Math.max(
@@ -409,6 +512,7 @@ function parseTradeRequest(
       )
     );
 
+
   return {
     side,
     slotId,
@@ -420,7 +524,7 @@ function parseTradeRequest(
 
 
 // ======================================================
-// JUPITER QUOTE
+// GET JUPITER QUOTE
 // ======================================================
 
 async function getJupiterQuote({
@@ -429,74 +533,118 @@ async function getJupiterQuote({
   atomicAmount,
   slippageBps
 }) {
+
   const params =
     new URLSearchParams({
+
       inputMint,
+
       outputMint,
+
       amount:
         atomicAmount,
+
       slippageBps:
         String(
           slippageBps
-        )
+        ),
+
+      // Restrict odd/illiquid routing intermediates
+      restrictIntermediateTokens:
+        "true",
+
+      // Still allow Jupiter to choose a usable route
+      onlyDirectRoutes:
+        "false",
+
+      asLegacyTransaction:
+        "false"
     });
+
 
   const response =
     await fetch(
       `${JUPITER_QUOTE_URL}?${params.toString()}`,
       {
-        method: "GET",
+        method:
+          "GET",
+
         headers:
           jupiterHeaders()
       }
     );
 
+
   const text =
     await response.text();
+
 
   let data;
 
   try {
+
     data =
       JSON.parse(text);
+
   } catch {
+
     data = {
       raw: text
     };
   }
 
+
   if (
     !response.ok ||
     !data?.outAmount
   ) {
+
     throw new Error(
-      `JUPITER_QUOTE_FAILED:${response.status}:${JSON.stringify(data)}`
+      `JUPITER_QUOTE_FAILED:${response.status}:${JSON.stringify(
+        data
+      )}`
     );
   }
+
+
+  if (
+    !Array.isArray(
+      data.routePlan
+    ) ||
+    data.routePlan.length === 0
+  ) {
+    throw new Error(
+      "JUPITER_NO_ROUTE"
+    );
+  }
+
 
   return data;
 }
 
 
 // ======================================================
-// BUILD SWAP
+// BUILD JUPITER SWAP
 // ======================================================
 
 async function buildSwap({
   quote,
   walletAddress
 }) {
+
   const response =
     await fetch(
       JUPITER_SWAP_URL,
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers:
           jupiterHeaders(),
 
         body:
           JSON.stringify({
+
             quoteResponse:
               quote,
 
@@ -509,10 +657,17 @@ async function buildSwap({
             dynamicComputeUnitLimit:
               true,
 
+            // Jupiter dynamically adapts slippage
+            dynamicSlippage:
+              true,
+
             prioritizationFeeLamports: {
+
               priorityLevelWithMaxLamports: {
+
                 maxLamports:
                   1000000,
+
                 priorityLevel:
                   "medium"
               }
@@ -521,28 +676,38 @@ async function buildSwap({
       }
     );
 
+
   const text =
     await response.text();
+
 
   let data;
 
   try {
+
     data =
       JSON.parse(text);
+
   } catch {
+
     data = {
       raw: text
     };
   }
 
+
   if (
     !response.ok ||
     !data?.swapTransaction
   ) {
+
     throw new Error(
-      `JUPITER_SWAP_BUILD_FAILED:${response.status}:${JSON.stringify(data)}`
+      `JUPITER_SWAP_BUILD_FAILED:${response.status}:${JSON.stringify(
+        data
+      )}`
     );
   }
+
 
   return data;
 }
@@ -557,57 +722,93 @@ export default async function handler(
   res
 ) {
 
-  // GET = wallet test
+  // ==================================================
+  // GET = SAFE WALLET TEST
+  // ==================================================
+
   if (
     req.method === "GET"
   ) {
+
     if (
       req.query?.test ===
       "wallet"
     ) {
+
       return handleWalletTest(
         req,
         res
       );
     }
 
+
     return res
       .status(200)
       .json({
-        status: "ok",
+
+        status:
+          "ok",
+
         engine:
-          "FAWAZ_EXECUTION_AGENT_V4",
-        executed: false,
+          "FAWAZ_EXECUTION_AGENT_V5",
+
+        executed:
+          false,
+
         message:
           "Use ?test=wallet for wallet connection test"
       });
   }
 
 
-  // POST only for real trading
+  // ==================================================
+  // POST ONLY FOR REAL TRADING
+  // ==================================================
+
   if (
     req.method !== "POST"
   ) {
+
     return res
       .status(405)
       .json({
-        status: "error",
-        executed: false,
+
+        status:
+          "error",
+
+        executed:
+          false,
+
         message:
           "GET or POST only"
       });
   }
 
 
+  // ==================================================
+  // AUTH
+  // ==================================================
+
   const auth =
     authorize(req);
 
-  if (!auth.ok) {
+
+  if (
+    !auth.ok
+  ) {
+
     return res
-      .status(auth.status)
+      .status(
+        auth.status
+      )
       .json({
-        status: "error",
-        executed: false,
+
+        status:
+          "error",
+
+        executed:
+          false,
+
         reason:
           auth.reason
       });
@@ -616,10 +817,15 @@ export default async function handler(
 
   try {
 
+    // ==================================================
+    // PARSE REQUEST
+    // ==================================================
+
     const trade =
       parseTradeRequest(
         req.body || {}
       );
+
 
     const {
       side,
@@ -630,41 +836,70 @@ export default async function handler(
     } = trade;
 
 
+    // ==================================================
+    // WAIT / HOLD
+    // ==================================================
+
     if (
       side === "WAIT" ||
       side === "HOLD"
     ) {
+
       return res
         .status(200)
         .json({
-          status: "ok",
-          executed: false,
-          decision: "HOLD",
+
+          status:
+            "ok",
+
+          executed:
+            false,
+
+          decision:
+            "HOLD",
+
           slotId,
+
           message:
             "No trade requested"
         });
     }
 
 
+    // ==================================================
+    // VALID SIDE
+    // ==================================================
+
     if (
       side !== "BUY" &&
       side !== "SELL"
     ) {
+
       return res
         .status(400)
         .json({
-          status: "error",
-          executed: false,
+
+          status:
+            "error",
+
+          executed:
+            false,
+
           slotId,
+
           message:
             "Invalid trade side"
         });
     }
 
 
+    // ==================================================
+    // KEYPAIR
+    // ==================================================
+
     const keypair =
       loadBotKeypair();
+
 
     const botAddress =
       verifyWalletMatchesKeypair(
@@ -672,31 +907,51 @@ export default async function handler(
       );
 
 
+    // ==================================================
+    // SWAP PARAMETERS
+    // ==================================================
+
     let inputMint;
+
     let outputMint;
+
     let atomicAmount;
+
     let humanAmount;
 
+
+    // ==================================================
+    // BUY SOL WITH USDC
+    // ==================================================
 
     if (
       side === "BUY"
     ) {
+
       if (
         !Number.isFinite(
           amountUsd
         ) ||
         amountUsd <= 0
       ) {
+
         return res
           .status(400)
           .json({
-            status: "error",
-            executed: false,
+
+            status:
+              "error",
+
+            executed:
+              false,
+
             slotId,
+
             message:
               "BUY requires valid amountUsd"
           });
       }
+
 
       inputMint =
         USDC_MINT;
@@ -715,27 +970,41 @@ export default async function handler(
     }
 
 
+    // ==================================================
+    // SELL SOL FOR USDC
+    // ==================================================
+
     if (
       side === "SELL"
     ) {
+
       if (
         !Number.isFinite(
           amountSol
         ) ||
         amountSol <= 0
       ) {
+
         return res
           .status(400)
           .json({
-            status: "blocked",
-            executed: false,
+
+            status:
+              "blocked",
+
+            executed:
+              false,
+
             slotId,
+
             reason:
               "SELL_AMOUNT_SOL_REQUIRED",
+
             message:
               "SELL requires amountSol/quantity"
           });
       }
+
 
       inputMint =
         SOL_MINT;
@@ -754,14 +1023,26 @@ export default async function handler(
     }
 
 
+    // ==================================================
+    // GET QUOTE
+    // ==================================================
+
     const quote =
       await getJupiterQuote({
+
         inputMint,
+
         outputMint,
+
         atomicAmount,
+
         slippageBps
       });
 
+
+    // ==================================================
+    // PRICE IMPACT CHECK
+    // ==================================================
 
     const priceImpactPct =
       safeNumber(
@@ -776,35 +1057,56 @@ export default async function handler(
       ) >
       MAX_PRICE_IMPACT_PCT
     ) {
+
       return res
         .status(200)
         .json({
-          status: "blocked",
-          executed: false,
+
+          status:
+            "blocked",
+
+          executed:
+            false,
+
           slotId,
+
           reason:
             "PRICE_IMPACT_TOO_HIGH",
+
           priceImpactPct,
+
           maxPriceImpactPct:
             MAX_PRICE_IMPACT_PCT,
+
           slippageBps
         });
     }
 
 
+    // ==================================================
+    // BUILD SWAP
+    // ==================================================
+
     const swapData =
       await buildSwap({
+
         quote,
+
         walletAddress:
           botAddress
       });
 
+
+    // ==================================================
+    // DESERIALIZE
+    // ==================================================
 
     const transactionBuffer =
       Buffer.from(
         swapData.swapTransaction,
         "base64"
       );
+
 
     const transaction =
       VersionedTransaction
@@ -813,10 +1115,18 @@ export default async function handler(
         );
 
 
+    // ==================================================
+    // SIGN
+    // ==================================================
+
     transaction.sign([
       keypair
     ]);
 
+
+    // ==================================================
+    // SOLANA CONNECTION
+    // ==================================================
 
     const connection =
       new Connection(
@@ -825,25 +1135,68 @@ export default async function handler(
       );
 
 
-    const signature =
-      await connection
-        .sendRawTransaction(
-          transaction.serialize(),
-          {
-            skipPreflight:
-              false,
-            maxRetries:
-              3
-          }
-        );
+    // ==================================================
+    // SEND TRANSACTION
+    // ==================================================
 
+    let signature;
+
+
+    try {
+
+      signature =
+        await connection
+          .sendRawTransaction(
+            transaction.serialize(),
+            {
+              skipPreflight:
+                false,
+
+              maxRetries:
+                3
+            }
+          );
+
+    } catch (sendError) {
+
+      console.error(
+        "SOLANA SEND ERROR:",
+        sendError
+      );
+
+
+      if (
+        Array.isArray(
+          sendError
+            ?.transactionLogs
+        )
+      ) {
+
+        console.error(
+          "SOLANA TRANSACTION LOGS:",
+          sendError
+            .transactionLogs
+        );
+      }
+
+
+      throw sendError;
+    }
+
+
+    // ==================================================
+    // CONFIRM TRANSACTION
+    // ==================================================
 
     if (
-      swapData.lastValidBlockHeight
+      swapData
+        .lastValidBlockHeight
     ) {
+
       await connection
         .confirmTransaction(
           {
+
             signature,
 
             blockhash:
@@ -855,6 +1208,7 @@ export default async function handler(
               swapData
                 .lastValidBlockHeight
           },
+
           "confirmed"
         );
 
@@ -868,40 +1222,69 @@ export default async function handler(
     }
 
 
+    // ==================================================
+    // SUCCESS
+    // ==================================================
+
     return res
       .status(200)
       .json({
-        status: "ok",
-        executed: true,
-        automatic: true,
+
+        status:
+          "ok",
+
+        executed:
+          true,
+
+        automatic:
+          true,
+
         engine:
-          "FAWAZ_EXECUTION_AGENT_V4",
+          "FAWAZ_EXECUTION_AGENT_V5",
+
         slotId,
+
         side,
+
         amount:
           humanAmount,
+
         amountType:
           side === "BUY"
             ? "USDC"
             : "SOL",
+
         walletAddress:
           botAddress,
+
         signature,
 
         quote: {
+
           inputMint,
+
           outputMint,
+
           inAmount:
             quote.inAmount,
+
           outAmount:
             quote.outAmount,
-          otherAmountThreshold:
-            quote.otherAmountThreshold ||
-            null,
+
           priceImpactPct:
-            quote.priceImpactPct ||
+            quote.priceImpactPct ??
             null,
-          slippageBps
+
+          slippageBps,
+
+          routeCount:
+            Array.isArray(
+              quote.routePlan
+            )
+              ? quote
+                  .routePlan
+                  .length
+              : 0
         },
 
         timestamp:
@@ -920,16 +1303,24 @@ export default async function handler(
       error
     );
 
+
     return res
       .status(500)
       .json({
-        status: "error",
-        executed: false,
+
+        status:
+          "error",
+
+        executed:
+          false,
+
         engine:
-          "FAWAZ_EXECUTION_AGENT_V4",
+          "FAWAZ_EXECUTION_AGENT_V5",
+
         message:
           error?.message ||
           "Execution Agent failed",
+
         timestamp:
           new Date()
             .toISOString()
