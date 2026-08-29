@@ -18,19 +18,13 @@ function getDatabaseUrl() {
 
   for (
     const value
-    of Object.values(
-      process.env
-    )
+    of Object.values(process.env)
   ) {
     if (
       typeof value === "string" &&
       (
-        value.startsWith(
-          "postgres://"
-        ) ||
-        value.startsWith(
-          "postgresql://"
-        )
+        value.startsWith("postgres://") ||
+        value.startsWith("postgresql://")
       )
     ) {
       return value;
@@ -211,9 +205,6 @@ export async function ensureTradingTables() {
 
 // ======================================================
 // GET LIVE OPEN POSITIONS
-//
-// IMPORTANT:
-// PAPER positions are ignored completely.
 // ======================================================
 
 export async function getOpenPositions(
@@ -348,9 +339,7 @@ export async function getFreeSlot(
     slot++
   ) {
     if (
-      !usedSlots.has(
-        slot
-      )
+      !usedSlots.has(slot)
     ) {
       return slot;
     }
@@ -382,11 +371,8 @@ export async function openPosition({
   const numericSlot =
     Number(slotId);
 
-
   if (
-    !Number.isInteger(
-      numericSlot
-    ) ||
+    !Number.isInteger(numericSlot) ||
     numericSlot < 1
   ) {
     throw new Error(
@@ -394,20 +380,17 @@ export async function openPosition({
     );
   }
 
-
   const existing =
     await getOpenPositionBySlot(
       walletAddress,
       numericSlot
     );
 
-
   if (existing) {
     throw new Error(
       `Slot ${numericSlot} already has a LIVE open position`
     );
   }
-
 
   const rows =
     await sql`
@@ -454,9 +437,7 @@ export async function openPosition({
 
         ${
           targetBps !== null
-            ? Number(
-                targetBps
-              )
+            ? Number(targetBps)
             : null
         },
 
@@ -504,16 +485,13 @@ export async function updateHighestPrice({
             highest_price,
             entry_price
           ),
-          ${Number(
-            highestPrice
-          )}
+          ${Number(highestPrice)}
         )
 
       WHERE id =
         ${Number(id)}
 
-        AND status =
-          'OPEN'
+        AND status = 'OPEN'
 
         AND (
           strategy IS NULL
@@ -580,8 +558,7 @@ export async function activateTrailing({
       WHERE id =
         ${Number(id)}
 
-        AND status =
-          'OPEN'
+        AND status = 'OPEN'
 
         AND (
           strategy IS NULL
@@ -618,7 +595,6 @@ export async function closePosition({
 
   const sql = db();
 
-
   const rows =
     await sql`
       SELECT *
@@ -627,8 +603,7 @@ export async function closePosition({
       WHERE id =
         ${Number(id)}
 
-        AND status =
-          'OPEN'
+        AND status = 'OPEN'
 
         AND (
           strategy IS NULL
@@ -643,10 +618,8 @@ export async function closePosition({
       LIMIT 1
     `;
 
-
   const position =
     rows[0];
-
 
   if (!position) {
     throw new Error(
@@ -654,23 +627,18 @@ export async function closePosition({
     );
   }
 
-
   const entryUsdc =
     Number(
       position.entry_usdc
     );
-
 
   const receivedUsdc =
     Number(
       exitUsdc
     );
 
-
   if (
-    !Number.isFinite(
-      receivedUsdc
-    ) ||
+    !Number.isFinite(receivedUsdc) ||
     receivedUsdc < 0
   ) {
     throw new Error(
@@ -678,11 +646,9 @@ export async function closePosition({
     );
   }
 
-
   const pnl =
     receivedUsdc -
     entryUsdc;
-
 
   const pnlPct =
     entryUsdc > 0
@@ -691,7 +657,6 @@ export async function closePosition({
           entryUsdc
         ) * 100
       : 0;
-
 
   const updated =
     await sql`
@@ -702,9 +667,7 @@ export async function closePosition({
           'CLOSED',
 
         exit_price =
-          ${Number(
-            exitPrice
-          )},
+          ${Number(exitPrice)},
 
         exit_usdc =
           ${receivedUsdc},
@@ -730,7 +693,6 @@ export async function closePosition({
       RETURNING *
     `;
 
-
   return updated[0];
 }
 
@@ -747,7 +709,6 @@ export async function getRecentClosedTrades(
 
   const sql = db();
 
-
   const safeLimit =
     Math.max(
       1,
@@ -757,7 +718,6 @@ export async function getRecentClosedTrades(
         20
       )
     );
-
 
   const rows =
     await sql`
@@ -786,15 +746,13 @@ export async function getRecentClosedTrades(
       LIMIT ${safeLimit}
     `;
 
-
   return rows.map(
     trade => ({
       ...trade,
 
       pnlBps:
         Number(
-          trade
-            .realized_pnl_pct ||
+          trade.realized_pnl_pct ||
           0
         ) * 100
     })
@@ -812,7 +770,6 @@ export async function get24HourStats(
   await ensureTradingTables();
 
   const sql = db();
-
 
   const rows =
     await sql`
@@ -862,10 +819,8 @@ export async function get24HourStats(
           INTERVAL '24 hours'
     `;
 
-
   const stats =
     rows[0];
-
 
   const trades =
     Number(
@@ -873,13 +828,11 @@ export async function get24HourStats(
       0
     );
 
-
   const wins =
     Number(
       stats.wins ||
       0
     );
-
 
   return {
     trades,
@@ -919,7 +872,6 @@ export async function getAllTimeStats(
   await ensureTradingTables();
 
   const sql = db();
-
 
   const rows =
     await sql`
@@ -965,10 +917,8 @@ export async function getAllTimeStats(
         )
     `;
 
-
   const stats =
     rows[0];
-
 
   const trades =
     Number(
@@ -976,13 +926,11 @@ export async function getAllTimeStats(
       0
     );
 
-
   const wins =
     Number(
       stats.wins ||
       0
     );
-
 
   return {
     trades,
@@ -1040,7 +988,6 @@ export async function getTradingDashboard(
 
     ]);
 
-
   return {
 
     openPosition:
@@ -1060,13 +1007,16 @@ export async function getTradingDashboard(
       total
   };
 }
-// نهاية الكود القديم
 
 
-
-// الكود الجديد يبدأ هنا
 // ======================================================
 // MARK POSITION FOR RECONCILIATION
+//
+// IMPORTANT:
+// - Does NOT mark the position as CLOSED.
+// - Does NOT create realized profit/loss.
+// - RECONCILE positions are excluded from getOpenPositions()
+//   because that query only loads status = 'OPEN'.
 // ======================================================
 
 export async function markPositionForReconciliation({
@@ -1077,19 +1027,40 @@ export async function markPositionForReconciliation({
 
   const sql = db();
 
+  const numericId =
+    Number(id);
+
+  if (
+    !Number.isInteger(numericId) ||
+    numericId <= 0
+  ) {
+    throw new Error(
+      "INVALID_POSITION_ID_FOR_RECONCILIATION"
+    );
+  }
+
   const rows =
     await sql`
       UPDATE bot_positions
 
       SET
-        status = 'RECONCILE',
-        close_reason = ${reason}
+        status =
+          'RECONCILE',
 
-      WHERE id = ${Number(id)}
-        AND status = 'OPEN'
+        close_reason =
+          ${reason}
+
+      WHERE id =
+        ${numericId}
+
+        AND status =
+          'OPEN'
 
       RETURNING *
     `;
 
-  return rows[0] || null;
+  return (
+    rows[0] ||
+    null
+  );
 }
