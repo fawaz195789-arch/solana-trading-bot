@@ -1,5 +1,5 @@
 // ======================================================
-// WALLET CONNECTION + REAL BALANCES TEST
+// WALLET CONNECTION + REAL ON-CHAIN BALANCES
 // NO TRADE / NO TRANSACTION
 // ======================================================
 
@@ -9,57 +9,32 @@ async function handleWalletTest(
 ) {
   try {
 
-    // ===============================================
-    // LOAD PRIVATE KEY
-    // ===============================================
-
     const keypair =
       loadBotKeypair();
-
 
     const derivedAddress =
       keypair.publicKey.toString();
 
-
     const configuredWallet =
       getConfiguredWalletAddress();
 
-
     const walletMatch =
       !configuredWallet ||
-      configuredWallet ===
-        derivedAddress;
+      configuredWallet === derivedAddress;
 
 
     if (!walletMatch) {
-
       return res
         .status(500)
         .json({
-
-          status:
-            "error",
-
-          test:
-            "WALLET_CONNECTION",
-
-          executed:
-            false,
-
-          keyLoaded:
-            true,
-
-          keyValid:
-            true,
-
-          walletMatch:
-            false,
-
+          status: "error",
+          test: "WALLET_CONNECTION",
+          executed: false,
+          keyLoaded: true,
+          keyValid: true,
+          walletMatch: false,
           configuredWallet,
-
-          derivedWallet:
-            derivedAddress,
-
+          derivedWallet: derivedAddress,
           message:
             "Private key does not match configured wallet"
         });
@@ -67,7 +42,7 @@ async function handleWalletTest(
 
 
     // ===============================================
-    // CONNECT TO SOLANA
+    // SOLANA RPC CONNECTION
     // ===============================================
 
     const connection =
@@ -86,43 +61,85 @@ async function handleWalletTest(
         keypair.publicKey
       );
 
-
     const solBalance =
       balanceLamports /
-      Math.pow(
-        10,
-        SOL_DECIMALS
-      );
+      1_000_000_000;
 
 
     // ===============================================
-    // REAL USDC BALANCE
+    // REAL USDC BALANCE VIA RAW SOLANA RPC
     // ===============================================
 
-    const usdcMint =
-      new PublicKey(
-        USDC_MINT
+    const tokenResponse =
+      await fetch(
+        RPC_URL,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+
+              method:
+                "getTokenAccountsByOwner",
+
+              params: [
+                derivedAddress,
+
+                {
+                  mint:
+                    USDC_MINT
+                },
+
+                {
+                  encoding:
+                    "jsonParsed",
+
+                  commitment:
+                    "confirmed"
+                }
+              ]
+            })
+        }
       );
 
 
-    const tokenAccounts =
-      await connection
-        .getParsedTokenAccountsByOwner(
-          keypair.publicKey,
-          {
-            mint:
-              usdcMint
-          }
-        );
+    const tokenData =
+      await tokenResponse.json();
 
 
-    let usdcBalance =
-      0;
+    if (
+      tokenData?.error
+    ) {
+      throw new Error(
+        "USDC_BALANCE_RPC_FAILED:" +
+        JSON.stringify(
+          tokenData.error
+        )
+      );
+    }
+
+
+    const accounts =
+      Array.isArray(
+        tokenData?.result?.value
+      )
+        ? tokenData.result.value
+        : [];
+
+
+    let usdcBalance = 0;
 
 
     for (
       const account
-      of tokenAccounts.value
+      of accounts
     ) {
 
       const tokenAmount =
@@ -139,23 +156,27 @@ async function handleWalletTest(
       }
 
 
-      const atomic =
+      const amount =
         Number(
           tokenAmount.amount
         );
 
+      const decimals =
+        Number(
+          tokenAmount.decimals
+        );
+
 
       if (
-        Number.isFinite(
-          atomic
-        )
+        Number.isFinite(amount) &&
+        Number.isFinite(decimals)
       ) {
 
         usdcBalance +=
-          atomic /
+          amount /
           Math.pow(
             10,
-            USDC_DECIMALS
+            decimals
           );
       }
     }
@@ -202,39 +223,34 @@ async function handleWalletTest(
         walletAddress:
           derivedAddress,
 
-        balances: {
-
-          sol:
-            Number(
-              solBalance
-                .toFixed(9)
-            ),
-
-          usdc:
-            Number(
-              usdcBalance
-                .toFixed(6)
-            )
-        },
-
         solBalance:
           Number(
-            solBalance
-              .toFixed(9)
+            solBalance.toFixed(9)
           ),
 
         usdcBalance:
           Number(
-            usdcBalance
-              .toFixed(6)
+            usdcBalance.toFixed(6)
           ),
+
+        balances: {
+          sol:
+            Number(
+              solBalance.toFixed(9)
+            ),
+
+          usdc:
+            Number(
+              usdcBalance.toFixed(6)
+            )
+        },
 
         timestamp:
           new Date()
             .toISOString(),
 
         message:
-          "Real on-chain SOL and USDC balances loaded successfully. No trade was executed."
+          "Real SOL and USDC balances loaded directly from Solana. No trade was executed."
       });
 
 
@@ -244,7 +260,6 @@ async function handleWalletTest(
       "Wallet Test Error:",
       error
     );
-
 
     return res
       .status(500)
@@ -259,21 +274,12 @@ async function handleWalletTest(
         executed:
           false,
 
-        keyLoaded:
-          false,
-
-        walletMatch:
-          false,
-
-        rpcConnected:
-          false,
-
         tradingKeyReady:
           false,
 
         message:
           error?.message ||
-          "Wallet connection test failed",
+          "Wallet balance test failed",
 
         timestamp:
           new Date()
