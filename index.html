@@ -81,12 +81,16 @@ h1{
   font-size:36px;
   font-weight:950;
   letter-spacing:-1px;
+  direction:ltr;
+  text-align:right;
 }
 
 .pnl{
   margin-top:8px;
   font-size:18px;
   font-weight:900;
+  direction:ltr;
+  text-align:right;
 }
 
 .positive{
@@ -95,6 +99,10 @@ h1{
 
 .negative{
   color:#f04438;
+}
+
+.neutral{
+  color:#9aa4b2;
 }
 
 .grid{
@@ -114,6 +122,8 @@ h1{
   font-size:25px;
   font-weight:900;
   margin-top:6px;
+  direction:ltr;
+  text-align:right;
 }
 
 .footer{
@@ -121,10 +131,6 @@ h1{
   text-align:center;
   color:#717b89;
   font-size:12px;
-}
-
-.loading{
-  color:#9aa4b2;
 }
 
 .error{
@@ -170,7 +176,7 @@ h1{
   <div class="hero">
 
     <div class="label">
-      رأس المال الحالي مع الأرباح
+      القيمة الحقيقية للمحفظة
     </div>
 
     <div
@@ -182,15 +188,43 @@ h1{
 
     <div
       id="totalPnl"
-      class="pnl"
+      class="pnl neutral"
     >
-      الربح: -
+      الربح المسجل: -
     </div>
 
   </div>
 
 
   <div class="grid">
+
+    <div class="card">
+      <div class="label">
+        USDC الحقيقي
+      </div>
+
+      <div
+        id="usdcBalance"
+        class="value"
+      >
+        -
+      </div>
+    </div>
+
+
+    <div class="card">
+      <div class="label">
+        SOL الحقيقي
+      </div>
+
+      <div
+        id="solBalance"
+        class="value"
+      >
+        -
+      </div>
+    </div>
+
 
     <div class="card">
       <div class="label">
@@ -312,6 +346,18 @@ function usdc(
 }
 
 
+function sol(
+  value,
+  decimals = 6
+){
+  return (
+    number(value)
+      .toFixed(decimals) +
+    " SOL"
+  );
+}
+
+
 function setPnl(
   value
 ){
@@ -324,7 +370,7 @@ function setPnl(
     );
 
   el.textContent =
-    "الربح: " +
+    "الربح المسجل: " +
     (
       pnl >= 0
         ? "+"
@@ -336,10 +382,42 @@ function setPnl(
   el.className =
     "pnl " +
     (
-      pnl >= 0
+      pnl > 0
         ? "positive"
-        : "negative"
+        : pnl < 0
+        ? "negative"
+        : "neutral"
     );
+}
+
+
+async function getJson(
+  url
+){
+  const response =
+    await fetch(
+      url,
+      {
+        method:"GET",
+        headers:{
+          Accept:
+            "application/json"
+        },
+        cache:"no-store"
+      }
+    );
+
+  const data =
+    await response.json();
+
+  if(!response.ok){
+    throw new Error(
+      data.message ||
+      "API ERROR"
+    );
+  }
+
+  return data;
 }
 
 
@@ -352,35 +430,25 @@ async function refresh(){
 
   try{
 
-    const response =
-      await fetch(
-        "/api/trade-orchestrator",
-        {
-          method:"GET",
-          headers:{
-            Accept:
-              "application/json"
-          },
-          cache:"no-store"
-        }
-      );
+    const [
+      bot,
+      wallet
+    ] =
+      await Promise.all([
 
-    const data =
-      await response.json();
+        getJson(
+          "/api/trade-orchestrator"
+        ),
 
-    if(!response.ok){
-      throw new Error(
-        data.message ||
-        "API ERROR"
-      );
-    }
+        getJson(
+          "/api/execution-agent?test=wallet"
+        )
 
+      ]);
 
-    const capital =
-      data.capital || {};
 
     const dashboard =
-      data.dashboard || {};
+      bot.dashboard || {};
 
     const all =
       dashboard.allTime || {};
@@ -393,19 +461,75 @@ async function refresh(){
         : [];
 
 
-    status.textContent =
-      "البوت يعمل";
+    const solBalance =
+      number(
+        wallet.solBalance,
+        0
+      );
 
-    status.className =
-      "";
+
+    const usdcBalance =
+      number(
+        wallet.usdcBalance,
+        0
+      );
+
+
+    const currentPrice =
+      number(
+        bot.signal?.currentPrice,
+        0
+      );
+
+
+    const realWalletValue =
+      usdcBalance +
+      (
+        solBalance *
+        currentPrice
+      );
+
+
+    if(
+      bot.realTrading === true &&
+      bot.execution === "FULL_AUTO" &&
+      wallet.tradingKeyReady === true
+    ){
+      status.textContent =
+        "البوت يعمل فعليًا";
+      status.className = "";
+    }
+    else{
+      status.textContent =
+        "تحقق من حالة البوت";
+      status.className =
+        "error";
+    }
 
 
     document.getElementById(
       "capitalTotal"
     ).textContent =
+      realWalletValue
+        .toFixed(4) +
+      " USDC";
+
+
+    document.getElementById(
+      "usdcBalance"
+    ).textContent =
       usdc(
-        capital.total,
+        usdcBalance,
         4
+      );
+
+
+    document.getElementById(
+      "solBalance"
+    ).textContent =
+      sol(
+        solBalance,
+        6
       );
 
 
@@ -457,7 +581,7 @@ async function refresh(){
       "available"
     ).textContent =
       usdc(
-        capital.availableForTrading,
+        usdcBalance,
         4
       );
 
@@ -472,6 +596,10 @@ async function refresh(){
 
   }
   catch(error){
+
+    console.error(
+      error
+    );
 
     status.textContent =
       "تعذر الاتصال بالبوت";
