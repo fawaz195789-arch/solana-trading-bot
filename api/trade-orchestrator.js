@@ -1,18 +1,13 @@
 // /api/trade-orchestrator.js
 // FAWAZ AI BOT
-// FULL AUTO ORCHESTRATOR V4 LIVE
+// FULL AUTO ORCHESTRATOR V5 LIVE
 //
 // GET  = LIVE ANALYSIS ONLY
 // POST = FULL AUTO REAL TRADING CYCLE
 //
 // Strategy:
-// MULTI ENTRY -> DYNAMIC SIZE -> NET PROFIT EXIT -> COMPOUND
-//
-// Capital:
-// Uses REAL on-chain USDC balance.
-// Keeps 20% reserve.
-// Up to 4 independent tracked positions.
-// Profits are automatically available for future sizing.
+// AUTO SLOTS -> 80% CAPITAL TARGET -> DYNAMIC SIZE
+// MULTI ENTRY -> NET PROFIT EXIT -> COMPOUND
 
 import crypto from "crypto";
 
@@ -35,39 +30,40 @@ import {
 
 const CONFIG = {
 
-  maxSlots: 4,
-
+  // Capital management
   reservePct: 0.20,
+  maxCapitalUsagePct: 0.80,
 
+  // Dynamic slots
+  minSlots: 4,
+  maxSlotsCap: 16,
   minSlotUsd: 0.25,
 
-  weakEntryPct: 0.18,
-  normalEntryPct: 0.22,
-  strongEntryPct: 0.26,
-  veryStrongEntryPct: 0.30,
+  // Entry sizing relative to target slot budget
+  weakSlotMultiplier: 0.80,
+  normalSlotMultiplier: 0.95,
+  strongSlotMultiplier: 1.05,
+  veryStrongSlotMultiplier: 1.15,
 
-  maxSingleEntryPctOfAvailable: 0.30,
-
+  // Multi-entry spacing
   minEntrySpacingBps: 12,
-
   minAdditionalEntryConfidence: 48,
-
   dipAddBelowLowestBps: 8,
 
+  // Expected move before BUY
   calmTargetBps: 30,
   normalTargetBps: 40,
   fastTargetBps: 55,
 
-// 12 bps = 0.12% estimated NET profit
+  // 12 bps = 0.12% estimated NET profit
   minNetExitBps: 12,
 
   // Emergency protection
   stopLossBps: 40,
 
+  // Execution / edge controls
   maxSlippageBps: 30,
-
   minNetEdgeBps: 10,
-
   executionBufferBps: 6
 };
 
@@ -141,6 +137,40 @@ function atomicToAmount(
       decimals
     )
   );
+}
+
+
+function getDynamicMaxSlots(
+  totalCapitalUsd
+) {
+
+  const capital =
+    Math.max(
+      0,
+      num(totalCapitalUsd)
+    );
+
+  if (capital < 25) {
+    return 4;
+  }
+
+  if (capital < 50) {
+    return 6;
+  }
+
+  if (capital < 100) {
+    return 8;
+  }
+
+  if (capital < 250) {
+    return 10;
+  }
+
+  if (capital < 500) {
+    return 12;
+  }
+
+  return CONFIG.maxSlotsCap;
 }
 
 
@@ -310,6 +340,7 @@ async function fetchJson(
       url,
       {
         ...options,
+
         cache:
           "no-store"
       }
@@ -331,7 +362,8 @@ async function fetchJson(
   } catch {
 
     data = {
-      raw: text
+      raw:
+        text
     };
   }
 
@@ -603,7 +635,7 @@ function getDynamicTarget(
 
 
 // ======================================================
-// REAL CAPITAL
+// REAL CAPITAL / AUTO SLOTS
 // ======================================================
 
 function calculateCapital({
@@ -652,17 +684,79 @@ function calculateCapital({
     );
 
 
+  const maxSlots =
+    getDynamicMaxSlots(
+      trackedNav
+    );
+
+
+  const tradableTarget =
+    trackedNav *
+    CONFIG.maxCapitalUsagePct;
+
+
   const reserve =
     trackedNav *
     CONFIG.reservePct;
 
 
-  const availableForTrading =
+  const usedInPositions =
+    positions.reduce(
+      (
+        total,
+        position
+      ) => {
+
+        return (
+          total +
+          num(
+            position
+              .entry_usdc
+          )
+        );
+      },
+      0
+    );
+
+
+  const remainingTradableBudget =
+    Math.max(
+      0,
+      tradableTarget -
+      usedInPositions
+    );
+
+
+  const cashAboveReserve =
     Math.max(
       0,
       realUsdc -
       reserve
     );
+
+
+  const availableForTrading =
+    Math.max(
+      0,
+      Math.min(
+        cashAboveReserve,
+        remainingTradableBudget
+      )
+    );
+
+
+  const targetSlotBudget =
+    maxSlots > 0
+      ? tradableTarget /
+        maxSlots
+      : 0;
+
+
+  const exposurePct =
+    trackedNav > 0
+      ? usedInPositions /
+        trackedNav
+      : 0;
 
 
   return {
@@ -688,9 +782,35 @@ function calculateCapital({
     reservePct:
       CONFIG.reservePct,
 
+    maxCapitalUsagePct:
+      CONFIG.maxCapitalUsagePct,
+
     reserve:
       roundUsd(
         reserve
+      ),
+
+    tradableTarget:
+      roundUsd(
+        tradableTarget
+      ),
+
+    usedInPositions:
+      roundUsd(
+        usedInPositions
+      ),
+
+    exposurePct:
+      Number(
+        (
+          exposurePct *
+          100
+        ).toFixed(2)
+      ),
+
+    remainingTradableBudget:
+      roundUsd(
+        remainingTradableBudget
       ),
 
     availableForTrading:
@@ -698,8 +818,12 @@ function calculateCapital({
         availableForTrading
       ),
 
-    maxSlots:
-      CONFIG.maxSlots,
+    targetSlotBudget:
+      roundUsd(
+        targetSlotBudget
+      ),
+
+    maxSlots,
 
     openPositions:
       positions.length,
@@ -717,7 +841,9 @@ function calculateCapital({
 function getDynamicEntrySize({
   availableUsdc,
   confidence,
-  openPositions
+  openPositions,
+  maxSlots,
+  targetSlotBudget
 }) {
 
   const available =
@@ -738,78 +864,90 @@ function getDynamicEntrySize({
   }
 
 
-  let pct =
+  const remainingSlots =
+    Math.max(
+      1,
+      num(
+        maxSlots,
+        1
+      ) -
+      num(
+        openPositions,
+        0
+      )
+    );
+
+
+  const evenShareOfRemaining =
+    available /
+    remainingSlots;
+
+
+  const baseBudget =
+    Math.max(
+      CONFIG.minSlotUsd,
+      Math.min(
+        num(
+          targetSlotBudget,
+          evenShareOfRemaining
+        ),
+        evenShareOfRemaining
+      )
+    );
+
+
+  let multiplier =
     CONFIG
-      .weakEntryPct;
+      .weakSlotMultiplier;
 
 
   if (
     confidence >= 75
   ) {
 
-    pct =
+    multiplier =
       CONFIG
-        .veryStrongEntryPct;
+        .veryStrongSlotMultiplier;
   }
 
   else if (
     confidence >= 68
   ) {
 
-    pct =
+    multiplier =
       CONFIG
-        .strongEntryPct;
+        .strongSlotMultiplier;
   }
 
   else if (
     confidence >= 58
   ) {
 
-    pct =
+    multiplier =
       CONFIG
-        .normalEntryPct;
+        .normalSlotMultiplier;
   }
-
-
-  if (
-    openPositions >= 2
-  ) {
-
-    pct *=
-      0.82;
-  }
-
-
-  if (
-    openPositions >= 3
-  ) {
-
-    pct *=
-      0.72;
-  }
-
-
-  pct =
-    Math.min(
-      pct,
-      CONFIG
-        .maxSingleEntryPctOfAvailable
-    );
 
 
   const amount =
-    available *
-    pct;
+    Math.min(
+      available,
+      baseBudget *
+      multiplier
+    );
+
+
+  if (
+    amount <
+    CONFIG.minSlotUsd
+  ) {
+
+    return 0;
+  }
 
 
   return roundUsd(
-    Math.max(
-      CONFIG.minSlotUsd,
-      Math.min(
-        amount,
-        available
-      )
-    )
+    amount
   );
 }
 
@@ -1343,18 +1481,12 @@ async function buildSellCandidates({
         ),
 
       estimatedSellCostBps:
-  exitCosts
-    .estimatedSellCostBps,
+        exitCosts
+          .estimatedSellCostBps,
 
-estimatedSlippageBps:
-  exitCosts
-    .estimatedSlippageBps,
-
-netPnlBps:
-  Number(
-    netPnlBps
-      .toFixed(2)
-  ),
+      estimatedSlippageBps:
+        exitCosts
+          .estimatedSlippageBps,
 
       netPnlBps:
         Number(
@@ -1406,7 +1538,7 @@ async function buildBuyCandidate({
 
   if (
     positions.length >=
-    CONFIG.maxSlots
+    capital.maxSlots
   ) {
 
     return null;
@@ -1416,7 +1548,7 @@ async function buildBuyCandidate({
   const freeSlot =
     await getFreeSlot(
       walletAddress,
-      CONFIG.maxSlots
+      capital.maxSlots
     );
 
 
@@ -1466,6 +1598,9 @@ async function buildBuyCandidate({
       openPositions:
         positions.length,
 
+      maxSlots:
+        capital.maxSlots,
+
       createdAt:
         new Date()
           .toISOString()
@@ -1486,7 +1621,13 @@ async function buildBuyCandidate({
         ),
 
       openPositions:
-        positions.length
+        positions.length,
+
+      maxSlots:
+        capital.maxSlots,
+
+      targetSlotBudget:
+        capital.targetSlotBudget
     });
 
 
@@ -1648,7 +1789,7 @@ async function buildBuyCandidate({
       config: {
 
         maxOpenSlots:
-          CONFIG.maxSlots,
+          capital.maxSlots,
 
         maxSlippageBps:
           CONFIG
@@ -1770,6 +1911,12 @@ async function buildBuyCandidate({
       expectedNetEdgeBps,
 
     multiEntry,
+
+    maxSlots:
+      capital.maxSlots,
+
+    targetSlotBudget:
+      capital.targetSlotBudget,
 
     reason:
       signal.reason ||
@@ -2203,7 +2350,7 @@ async function executeApprovedBuy({
         execution.signature,
 
       strategy:
-        "LIVE_FAST_COMPOUND_V4",
+        "LIVE_AUTO_SLOTS_COMPOUND_V5",
 
       targetBps:
         candidate.targetBps,
@@ -2232,6 +2379,9 @@ async function executeApprovedBuy({
     solReceived,
 
     actualEntryPrice,
+
+    maxSlots:
+      analysis.capital.maxSlots,
 
     signature:
       execution.signature,
@@ -2325,8 +2475,8 @@ async function executeApprovedSell({
       amountSol,
 
       slippageBps:
-  candidate
-    .estimatedSlippageBps
+        candidate
+          .estimatedSlippageBps
     });
 
 
@@ -2475,10 +2625,10 @@ async function handleGet(
           "ok",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V4_LIVE",
+          "FAWAZ_AUTO_TRADER_V5_LIVE",
 
         strategy:
-          "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
+          "AUTO_SLOTS_80PCT_FAST_COMPOUND",
 
         liveMarket:
           true,
@@ -2626,7 +2776,7 @@ async function handleGet(
           "error",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V4_LIVE",
+          "FAWAZ_AUTO_TRADER_V5_LIVE",
 
         liveMarket:
           true,
@@ -2681,7 +2831,7 @@ async function handlePost(
           false,
 
         engine:
-          "FAWAZ_AUTO_TRADER_V4_LIVE",
+          "FAWAZ_AUTO_TRADER_V5_LIVE",
 
         message:
           auth.reason
@@ -2701,6 +2851,7 @@ async function handlePost(
       null;
 
 
+    // SELL has priority to recycle capital quickly
     if (
       Array.isArray(
         analysis.sellCandidates
@@ -2802,10 +2953,10 @@ async function handlePost(
             "waiting",
 
           engine:
-            "FAWAZ_AUTO_TRADER_V4_LIVE",
+            "FAWAZ_AUTO_TRADER_V5_LIVE",
 
           strategy:
-            "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
+            "AUTO_SLOTS_80PCT_FAST_COMPOUND",
 
           liveMarket:
             true,
@@ -2905,10 +3056,10 @@ async function handlePost(
             : "blocked",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V4_LIVE",
+          "FAWAZ_AUTO_TRADER_V5_LIVE",
 
         strategy:
-          "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
+          "AUTO_SLOTS_80PCT_FAST_COMPOUND",
 
         liveMarket:
           true,
@@ -2924,6 +3075,9 @@ async function handlePost(
 
         executed:
           result?.executed === true,
+
+        capital:
+          analysis.capital,
 
         result,
 
@@ -2951,10 +3105,10 @@ async function handlePost(
           "error",
 
         engine:
-          "FAWAZ_AUTO_TRADER_V4_LIVE",
+          "FAWAZ_AUTO_TRADER_V5_LIVE",
 
         strategy:
-          "FAST_COMPOUND_MULTI_ENTRY_NET_EXIT",
+          "AUTO_SLOTS_80PCT_FAST_COMPOUND",
 
         liveMarket:
           true,
@@ -3022,7 +3176,7 @@ export default async function handler(
         "error",
 
       engine:
-        "FAWAZ_AUTO_TRADER_V4_LIVE",
+        "FAWAZ_AUTO_TRADER_V5_LIVE",
 
       message:
         "GET or POST only"
