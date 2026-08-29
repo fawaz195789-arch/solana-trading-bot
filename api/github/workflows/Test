@@ -1,0 +1,47 @@
+name: Test Real BUY
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-buy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Execute 1 USDC real BUY
+        env:
+          AUTO_TRADER_SECRET: ${{ secrets.AUTO_TRADER_SECRET }}
+
+        run: |
+          set -euo pipefail
+
+          RESPONSE=$(curl \
+            --silent \
+            --show-error \
+            --fail-with-body \
+            --request POST \
+            -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data '{
+              "side":"BUY",
+              "slotId":99,
+              "amountUsd":1,
+              "slippageBps":20
+            }' \
+            "https://fawaz-ai-bot.vercel.app/api/execution-agent")
+
+          echo "$RESPONSE" | jq .
+
+          EXECUTED=$(echo "$RESPONSE" | jq -r '.executed // false')
+          SIGNATURE=$(echo "$RESPONSE" | jq -r '.signature // "-"')
+
+          echo "Executed: $EXECUTED"
+          echo "Signature: $SIGNATURE"
+
+          if [ "$EXECUTED" != "true" ]; then
+            echo "REAL BUY TEST FAILED"
+            exit 1
+          fi
+
+          echo "REAL BUY TEST SUCCESSFUL"
