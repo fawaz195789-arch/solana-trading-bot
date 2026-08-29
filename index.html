@@ -321,6 +321,15 @@ td{
       </div>
 
       <div class="summaryItem">
+        <div id="sellTrades" class="num positive">
+          -
+        </div>
+        <div class="label">
+          صفقات البيع المكتملة
+        </div>
+      </div>
+
+      <div class="summaryItem">
         <div id="wins" class="num positive">
           -
         </div>
@@ -588,14 +597,6 @@ async function refresh(){
       positions.length;
 
 
-    /*
-      إجمالي الدخولات =
-      المغلقة + المفتوحة
-
-      هذا يحل مشكلة:
-      3 مفتوحة بينما إجمالي الصفقات = 1
-    */
-
     const closedTrades=
       num(all.trades);
 
@@ -609,6 +610,17 @@ async function refresh(){
       "entriesTotal"
     ).textContent=
       totalEntries;
+
+
+    /*
+      كل صفقة CLOSED تعني أن البوت
+      نفذ عملية SELL مكتملة وسجلها.
+    */
+
+    document.getElementById(
+      "sellTrades"
+    ).textContent=
+      closedTrades;
 
 
     document.getElementById(
