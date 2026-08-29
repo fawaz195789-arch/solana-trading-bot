@@ -10,7 +10,7 @@
 // 80% trading capital
 // 20% reserve
 // Maximum 4 open slots
-// Realized profits/losses automatically change future slot size
+// Compounding starts AFTER the old PnL baseline
 
 import crypto from "crypto";
 
@@ -36,6 +36,10 @@ import {
 
 const CONFIG = {
   startingCapitalUsd: 5,
+
+  // Old PnL ignored by compounding.
+  // Only PnL after this baseline changes future slot size.
+  compoundPnlBaseline: 0.0272839,
 
   maxSlots: 4,
 
@@ -341,7 +345,10 @@ async function executeTrade({
           slippageBps:
             clamp(
               Math.floor(
-                num(slippageBps, 20)
+                num(
+                  slippageBps,
+                  20
+                )
               ),
               1,
               CONFIG.maxSlippageBps
@@ -407,40 +414,47 @@ function getDynamicTarget(
 
 // ======================================================
 // REALIZED PNL
+// Only NEW PnL after the old baseline is compounded
 // ======================================================
 
 function getRealizedPnl(
   dashboard,
   recentTrades = []
 ) {
-  const dashboardValues = [
-    dashboard?.totalPnl,
-    dashboard?.total_pnl,
-    dashboard?.realizedPnl,
-    dashboard?.realized_pnl,
-    dashboard?.netPnl,
-    dashboard?.net_pnl,
-    dashboard?.totalProfit,
-    dashboard?.total_profit
-  ];
+  const allTimePnl =
+    Number(
+      dashboard
+        ?.allTime
+        ?.pnl
+    );
 
-  for (
-    const value
-    of dashboardValues
+  if (
+    Number.isFinite(
+      allTimePnl
+    )
   ) {
-    const n =
-      Number(value);
+    const pnlSinceCompoundStart =
+      allTimePnl -
+      CONFIG.compoundPnlBaseline;
 
+    // Prevent tiny floating-point residue
     if (
-      Number.isFinite(n)
+      Math.abs(
+        pnlSinceCompoundStart
+      ) < 0.000001
     ) {
-      return n;
+      return 0;
     }
+
+    return pnlSinceCompoundStart;
   }
 
-  // Fallback if dashboard does not expose total PnL.
+  // Fallback only if allTime.pnl is unavailable
   return recentTrades.reduce(
-    (total, trade) => {
+    (
+      total,
+      trade
+    ) => {
       const pnl =
         num(
           trade?.pnl_usdc ??
@@ -533,6 +547,9 @@ function calculateCapital({
   return {
     startingCapital:
       CONFIG.startingCapitalUsd,
+
+    compoundPnlBaseline:
+      CONFIG.compoundPnlBaseline,
 
     realizedPnl:
       roundUsd(realizedPnl),
@@ -668,7 +685,8 @@ function buildSellCandidates({
       reason,
 
       createdAt:
-        new Date().toISOString()
+        new Date()
+          .toISOString()
     });
   }
 
@@ -743,7 +761,8 @@ async function buildBuyCandidate({
         slotUsd,
 
       createdAt:
-        new Date().toISOString()
+        new Date()
+          .toISOString()
     };
   }
 
@@ -847,7 +866,8 @@ async function buildBuyCandidate({
       risk,
 
       createdAt:
-        new Date().toISOString()
+        new Date()
+          .toISOString()
     };
   }
 
@@ -895,7 +915,8 @@ async function buildBuyCandidate({
       "LIVE_BUY_SIGNAL",
 
     createdAt:
-      new Date().toISOString()
+      new Date()
+        .toISOString()
   };
 }
 
@@ -1517,7 +1538,8 @@ async function handleGet(
           analysis.dashboard,
 
         timestamp:
-          new Date().toISOString()
+          new Date()
+            .toISOString()
       });
 
   } catch (error) {
@@ -1552,7 +1574,8 @@ async function handleGet(
           "Live analysis failed",
 
         timestamp:
-          new Date().toISOString()
+          new Date()
+            .toISOString()
       });
   }
 }
@@ -1730,7 +1753,8 @@ async function handlePost(
           dashboard,
 
           timestamp:
-            new Date().toISOString()
+            new Date()
+              .toISOString()
         });
     }
 
@@ -1777,7 +1801,8 @@ async function handlePost(
         dashboard,
 
         timestamp:
-          new Date().toISOString()
+          new Date()
+            .toISOString()
       });
 
   } catch (error) {
@@ -1815,7 +1840,8 @@ async function handlePost(
           "Auto trading failed",
 
         timestamp:
-          new Date().toISOString()
+          new Date()
+            .toISOString()
       });
   }
 }
