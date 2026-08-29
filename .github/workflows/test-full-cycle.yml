@@ -1,0 +1,124 @@
+name: Test Full Trading Cycle
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-full-cycle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Execute REAL BUY then SELL
+        env:
+          AUTO_TRADER_SECRET: ${{ secrets.AUTO_TRADER_SECRET }}
+
+        run: |
+          set -euo pipefail
+
+          BASE_URL="https://fawaz-ai-bot.vercel.app"
+
+          echo "======================================"
+          echo "STARTING REAL FULL-CYCLE TEST"
+          echo "1 USDC -> SOL -> USDC"
+          echo "======================================"
+
+          # ==========================================
+          # BUY 1 USDC OF SOL
+          # ==========================================
+
+          echo "Executing BUY..."
+
+          BUY_RESPONSE=$(curl \
+            --silent \
+            --show-error \
+            --fail-with-body \
+            --connect-timeout 15 \
+            --max-time 60 \
+            --request POST \
+            -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data '{
+              "side":"BUY",
+              "slotId":98,
+              "amountUsd":1,
+              "slippageBps":20
+            }' \
+            "$BASE_URL/api/execution-agent")
+
+          echo "$BUY_RESPONSE" | jq .
+
+          BUY_EXECUTED=$(echo "$BUY_RESPONSE" | jq -r '.executed // false')
+          BUY_SIGNATURE=$(echo "$BUY_RESPONSE" | jq -r '.signature // "-"')
+          OUT_AMOUNT=$(echo "$BUY_RESPONSE" | jq -r '.quote.outAmount // "0"')
+
+          if [ "$BUY_EXECUTED" != "true" ]; then
+            echo "BUY FAILED"
+            exit 1
+          fi
+
+          if [ "$OUT_AMOUNT" = "0" ]; then
+            echo "INVALID SOL OUTPUT"
+            exit 1
+          fi
+
+          echo "BUY SUCCESS"
+          echo "Buy signature: $BUY_SIGNATURE"
+          echo "SOL atomic amount received: $OUT_AMOUNT"
+
+          # ==========================================
+          # CONVERT LAMPORTS -> SOL
+          # ==========================================
+
+          SOL_AMOUNT=$(awk "BEGIN {printf \"%.9f\", $OUT_AMOUNT / 1000000000}")
+
+          echo "SOL amount to sell: $SOL_AMOUNT"
+
+          # Small delay so balances are visible
+          sleep 5
+
+          # ==========================================
+          # SELL EXACT SOL RECEIVED
+          # ==========================================
+
+          echo "Executing SELL..."
+
+          SELL_BODY=$(jq -n \
+            --arg amountSol "$SOL_AMOUNT" \
+            '{
+              side:"SELL",
+              slotId:98,
+              amountSol:($amountSol|tonumber),
+              slippageBps:20
+            }')
+
+          SELL_RESPONSE=$(curl \
+            --silent \
+            --show-error \
+            --fail-with-body \
+            --connect-timeout 15 \
+            --max-time 60 \
+            --request POST \
+            -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --data "$SELL_BODY" \
+            "$BASE_URL/api/execution-agent")
+
+          echo "$SELL_RESPONSE" | jq .
+
+          SELL_EXECUTED=$(echo "$SELL_RESPONSE" | jq -r '.executed // false')
+          SELL_SIGNATURE=$(echo "$SELL_RESPONSE" | jq -r '.signature // "-"')
+
+          if [ "$SELL_EXECUTED" != "true" ]; then
+            echo "SELL FAILED"
+            exit 1
+          fi
+
+          echo "======================================"
+          echo "REAL FULL CYCLE SUCCESSFUL"
+          echo "BUY  : SUCCESS"
+          echo "SELL : SUCCESS"
+          echo "BUY SIGNATURE : $BUY_SIGNATURE"
+          echo "SELL SIGNATURE: $SELL_SIGNATURE"
+          echo "======================================"
