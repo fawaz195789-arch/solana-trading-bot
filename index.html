@@ -1,4 +1,5 @@
 <!doctype html>
+<html lang="ar" dir="<!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
@@ -6,9 +7,7 @@
 <title>FAWAZ AI TRADER</title>
 
 <style>
-*{
-  box-sizing:border-box;
-}
+*{box-sizing:border-box}
 
 body{
   margin:0;
@@ -23,11 +22,17 @@ body{
   margin:auto;
 }
 
+.header,
+.hero,
+.card,
+.trade-card{
+  background:#151a22;
+  border:1px solid #232a35;
+}
+
 .header{
   padding:20px;
   margin-bottom:14px;
-  background:#151a22;
-  border:1px solid #232a35;
   border-radius:22px;
 }
 
@@ -65,7 +70,6 @@ h1{
 
 .hero{
   background:linear-gradient(145deg,#171d26,#11161d);
-  border:1px solid #252d39;
   padding:24px;
   border-radius:24px;
   margin-bottom:14px;
@@ -80,7 +84,6 @@ h1{
 .big{
   font-size:36px;
   font-weight:950;
-  letter-spacing:-1px;
   direction:ltr;
   text-align:right;
 }
@@ -89,21 +92,11 @@ h1{
   margin-top:8px;
   font-size:18px;
   font-weight:900;
-  direction:ltr;
-  text-align:right;
 }
 
-.positive{
-  color:#32d583;
-}
-
-.negative{
-  color:#f04438;
-}
-
-.neutral{
-  color:#9aa4b2;
-}
+.positive{color:#32d583}
+.negative{color:#f04438}
+.neutral{color:#9aa4b2}
 
 .grid{
   display:grid;
@@ -112,8 +105,6 @@ h1{
 }
 
 .card{
-  background:#151a22;
-  border:1px solid #232a35;
   border-radius:20px;
   padding:18px;
 }
@@ -124,6 +115,39 @@ h1{
   margin-top:6px;
   direction:ltr;
   text-align:right;
+}
+
+.trade-card{
+  margin-top:14px;
+  padding:20px;
+  border-radius:22px;
+}
+
+.trade-title{
+  font-size:18px;
+  font-weight:900;
+  margin-bottom:12px;
+}
+
+.row{
+  display:flex;
+  justify-content:space-between;
+  gap:15px;
+  padding:10px 0;
+  border-bottom:1px solid #252d37;
+}
+
+.row:last-child{
+  border-bottom:0;
+}
+
+.row span{
+  color:#8d97a5;
+}
+
+.row b{
+  direction:ltr;
+  unicode-bidi:isolate;
 }
 
 .footer{
@@ -138,17 +162,9 @@ h1{
 }
 
 @media(max-width:480px){
-  .big{
-    font-size:31px;
-  }
-
-  .value{
-    font-size:21px;
-  }
-
-  h1{
-    font-size:22px;
-  }
+  .big{font-size:31px}
+  .value{font-size:21px}
+  h1{font-size:22px}
 }
 </style>
 </head>
@@ -158,6 +174,7 @@ h1{
 <div class="container">
 
   <div class="header">
+
     <h1>⚡ FAWAZ AI TRADER</h1>
 
     <div class="sub">
@@ -166,10 +183,12 @@ h1{
 
     <div class="status">
       <span class="dot"></span>
+
       <span id="systemStatus">
         جاري الاتصال...
       </span>
     </div>
+
   </div>
 
 
@@ -179,18 +198,16 @@ h1{
       القيمة الحقيقية للمحفظة
     </div>
 
-    <div
-      id="capitalTotal"
-      class="big"
-    >
+    <div id="capitalTotal" class="big">
       -
     </div>
 
-    <div
-      id="totalPnl"
-      class="pnl neutral"
-    >
-      الربح المسجل: -
+    <div id="realizedPnl" class="pnl neutral">
+      الربح المحقق: -
+    </div>
+
+    <div id="floatingPnl" class="pnl neutral">
+      الربح الحالي للصفقات: -
     </div>
 
   </div>
@@ -199,114 +216,87 @@ h1{
   <div class="grid">
 
     <div class="card">
-      <div class="label">
-        USDC الحقيقي
-      </div>
-
-      <div
-        id="usdcBalance"
-        class="value"
-      >
-        -
-      </div>
+      <div class="label">USDC الحقيقي</div>
+      <div id="usdcBalance" class="value">-</div>
     </div>
 
-
     <div class="card">
-      <div class="label">
-        SOL الحقيقي
-      </div>
-
-      <div
-        id="solBalance"
-        class="value"
-      >
-        -
-      </div>
+      <div class="label">SOL الحقيقي</div>
+      <div id="solBalance" class="value">-</div>
     </div>
 
-
     <div class="card">
-      <div class="label">
-        الصفقات المفتوحة الآن
-      </div>
-
-      <div
-        id="openTrades"
-        class="value"
-      >
-        -
-      </div>
+      <div class="label">الصفقات المفتوحة الآن</div>
+      <div id="openTrades" class="value">-</div>
     </div>
 
-
     <div class="card">
-      <div class="label">
-        إجمالي الصفقات
-      </div>
-
-      <div
-        id="totalTrades"
-        class="value"
-      >
-        -
-      </div>
+      <div class="label">إجمالي الصفقات</div>
+      <div id="totalTrades" class="value">-</div>
     </div>
 
-
     <div class="card">
-      <div class="label">
-        الصفقات الرابحة
-      </div>
-
-      <div
-        id="wins"
-        class="value positive"
-      >
-        -
-      </div>
+      <div class="label">الصفقات الرابحة</div>
+      <div id="wins" class="value positive">-</div>
     </div>
 
-
     <div class="card">
-      <div class="label">
-        الصفقات الخاسرة
-      </div>
-
-      <div
-        id="losses"
-        class="value negative"
-      >
-        -
-      </div>
+      <div class="label">الصفقات الخاسرة</div>
+      <div id="losses" class="value negative">-</div>
     </div>
 
-
     <div class="card">
-      <div class="label">
-        نسبة النجاح
-      </div>
-
-      <div
-        id="winRate"
-        class="value"
-      >
-        -
-      </div>
+      <div class="label">نسبة النجاح</div>
+      <div id="winRate" class="value">-</div>
     </div>
 
-
     <div class="card">
-      <div class="label">
-        المتاح للتداول
-      </div>
+      <div class="label">المتاح للتداول</div>
+      <div id="available" class="value">-</div>
+    </div>
 
-      <div
-        id="available"
-        class="value"
-      >
-        -
-      </div>
+  </div>
+
+
+  <div id="tradeDetails" class="trade-card" style="display:none">
+
+    <div class="trade-title">
+      📈 الصفقة المفتوحة
+    </div>
+
+    <div class="row">
+      <span>Slot</span>
+      <b id="tradeSlot">-</b>
+    </div>
+
+    <div class="row">
+      <span>قيمة الدخول</span>
+      <b id="entryUsdc">-</b>
+    </div>
+
+    <div class="row">
+      <span>سعر الدخول</span>
+      <b id="entryPrice">-</b>
+    </div>
+
+    <div class="row">
+      <span>السعر الحالي</span>
+      <b id="currentPrice">-</b>
+    </div>
+
+    <div class="row">
+      <span>الربح الحالي</span>
+      <b id="tradePnl">-</b>
+    </div>
+
+    <div class="row">
+      <span>نسبة الربح</span>
+      <b id="tradePnlPct">-</b>
+    </div>
+
+    <div class="row">
+      <span>هدف البيع</span>
+      <b id="targetPrice">-</b>
     </div>
 
   </div>
@@ -322,11 +312,8 @@ h1{
 
 <script>
 
-function number(
-  value,
-  fallback = 0
-){
-  const n = Number(value);
+function number(value,fallback=0){
+  const n=Number(value);
 
   return Number.isFinite(n)
     ? n
@@ -334,80 +321,52 @@ function number(
 }
 
 
-function usdc(
-  value,
-  decimals = 4
-){
-  return (
-    number(value)
-      .toFixed(decimals) +
-    " USDC"
-  );
+function colorClass(value){
+  if(value>0) return "positive";
+  if(value<0) return "negative";
+  return "neutral";
 }
 
 
-function sol(
-  value,
-  decimals = 6
-){
-  return (
-    number(value)
-      .toFixed(decimals) +
-    " SOL"
-  );
-}
-
-
-function setPnl(
+function setPnlElement(
+  id,
+  label,
   value
 ){
-  const pnl =
+  const el=
+    document.getElementById(id);
+
+  const n=
     number(value);
 
-  const el =
-    document.getElementById(
-      "totalPnl"
-    );
-
-  el.textContent =
-    "الربح المسجل: " +
-    (
-      pnl >= 0
-        ? "+"
-        : ""
-    ) +
-    pnl.toFixed(6) +
+  el.textContent=
+    label+
+    ": "+
+    (n>=0?"+":"")+
+    n.toFixed(6)+
     " USDC";
 
-  el.className =
-    "pnl " +
-    (
-      pnl > 0
-        ? "positive"
-        : pnl < 0
-        ? "negative"
-        : "neutral"
-    );
+  el.className=
+    "pnl "+
+    colorClass(n);
 }
 
 
-async function getJson(
-  url
-){
-  const response =
+async function getJson(url){
+
+  const response=
     await fetch(
       url,
       {
         method:"GET",
         headers:{
-          Accept:
-            "application/json"
+          Accept:"application/json"
         },
         cache:"no-store"
       }
     );
 
-  const data =
+  const data=
     await response.json();
 
   if(!response.ok){
@@ -423,7 +382,7 @@ async function getJson(
 
 async function refresh(){
 
-  const status =
+  const status=
     document.getElementById(
       "systemStatus"
     );
@@ -433,7 +392,7 @@ async function refresh(){
     const [
       bot,
       wallet
-    ] =
+    ]=
       await Promise.all([
 
         getJson(
@@ -447,13 +406,13 @@ async function refresh(){
       ]);
 
 
-    const dashboard =
+    const dashboard=
       bot.dashboard || {};
 
-    const all =
+    const all=
       dashboard.allTime || {};
 
-    const positions =
+    const positions=
       Array.isArray(
         dashboard.openPositions
       )
@@ -461,92 +420,138 @@ async function refresh(){
         : [];
 
 
-    const solBalance =
+    const solBalance=
       number(
-        wallet.solBalance,
-        0
+        wallet.solBalance
       );
 
-
-    const usdcBalance =
+    const usdcBalance=
       number(
-        wallet.usdcBalance,
-        0
+        wallet.usdcBalance
       );
 
-
-    const currentPrice =
+    const price=
       number(
-        bot.signal?.currentPrice,
-        0
+        bot.signal?.currentPrice
       );
 
 
-    const realWalletValue =
-      usdcBalance +
-      (
-        solBalance *
-        currentPrice
-      );
+    // ==========================================
+    // REAL WALLET VALUE
+    // ==========================================
 
-
-    if(
-      bot.realTrading === true &&
-      bot.execution === "FULL_AUTO" &&
-      wallet.tradingKeyReady === true
-    ){
-      status.textContent =
-        "البوت يعمل فعليًا";
-      status.className = "";
-    }
-    else{
-      status.textContent =
-        "تحقق من حالة البوت";
-      status.className =
-        "error";
-    }
+    const walletValue=
+      usdcBalance+
+      (solBalance*price);
 
 
     document.getElementById(
       "capitalTotal"
-    ).textContent =
-      realWalletValue
-        .toFixed(4) +
+    ).textContent=
+      walletValue.toFixed(4)+
       " USDC";
 
 
     document.getElementById(
       "usdcBalance"
-    ).textContent =
-      usdc(
-        usdcBalance,
-        4
-      );
+    ).textContent=
+      usdcBalance.toFixed(4)+
+      " USDC";
 
 
     document.getElementById(
       "solBalance"
-    ).textContent =
-      sol(
-        solBalance,
-        6
+    ).textContent=
+      solBalance.toFixed(6)+
+      " SOL";
+
+
+    // ==========================================
+    // REALIZED PNL
+    // ==========================================
+
+    const realizedPnl=
+      number(
+        all.pnl
       );
 
 
-    setPnl(
-      all.pnl
+    setPnlElement(
+      "realizedPnl",
+      "الربح المحقق",
+      realizedPnl
     );
 
 
+    // ==========================================
+    // FLOATING PNL
+    // ==========================================
+
+    let totalFloatingPnl=0;
+
+
+    for(const position of positions){
+
+      const entryPrice=
+        number(
+          position.entry_price
+        );
+
+      const entrySol=
+        number(
+          position.entry_sol
+        );
+
+      const entryUsdc=
+        number(
+          position.entry_usdc
+        );
+
+
+      if(
+        entryPrice<=0 ||
+        entrySol<=0 ||
+        price<=0
+      ){
+        continue;
+      }
+
+
+      const currentValue=
+        entrySol*
+        price;
+
+
+      const pnl=
+        currentValue-
+        entryUsdc;
+
+
+      totalFloatingPnl+=
+        pnl;
+    }
+
+
+    setPnlElement(
+      "floatingPnl",
+      "الربح الحالي للصفقات",
+      totalFloatingPnl
+    );
+
+
+    // ==========================================
+    // COUNTERS
+    // ==========================================
+
     document.getElementById(
       "openTrades"
-    ).textContent =
+    ).textContent=
       positions.length;
 
 
     document.getElementById(
       "totalTrades"
-    ).textContent =
+    ).textContent=
       number(
         all.trades
       );
@@ -554,7 +559,7 @@ async function refresh(){
 
     document.getElementById(
       "wins"
-    ).textContent =
+    ).textContent=
       number(
         all.wins
       );
@@ -562,7 +567,7 @@ async function refresh(){
 
     document.getElementById(
       "losses"
-    ).textContent =
+    ).textContent=
       number(
         all.losses
       );
@@ -570,25 +575,198 @@ async function refresh(){
 
     document.getElementById(
       "winRate"
-    ).textContent =
+    ).textContent=
       number(
         all.winRate
-      ).toFixed(1) +
+      ).toFixed(1)+
       "%";
 
 
     document.getElementById(
       "available"
-    ).textContent =
-      usdc(
-        usdcBalance,
-        4
+    ).textContent=
+      usdcBalance.toFixed(4)+
+      " USDC";
+
+
+    // ==========================================
+    // OPEN TRADE DETAILS
+    // ==========================================
+
+    const tradeBox=
+      document.getElementById(
+        "tradeDetails"
       );
+
+
+    if(
+      positions.length>0
+    ){
+
+      const position=
+        positions[0];
+
+
+      const entryPrice=
+        number(
+          position.entry_price
+        );
+
+
+      const entryUsdc=
+        number(
+          position.entry_usdc
+        );
+
+
+      const entrySol=
+        number(
+          position.entry_sol
+        );
+
+
+      const currentValue=
+        entrySol*
+        price;
+
+
+      const pnl=
+        currentValue-
+        entryUsdc;
+
+
+      const pnlPct=
+        entryUsdc>0
+          ? (
+              pnl/
+              entryUsdc
+            )*100
+          : 0;
+
+
+      const targetBps=
+        number(
+          position.target_bps
+        );
+
+
+      const targetPrice=
+        entryPrice*
+        (
+          1+
+          targetBps/
+          10000
+        );
+
+
+      tradeBox.style.display=
+        "block";
+
+
+      document.getElementById(
+        "tradeSlot"
+      ).textContent=
+        position.slot_id ??
+        "-";
+
+
+      document.getElementById(
+        "entryUsdc"
+      ).textContent=
+        entryUsdc.toFixed(6)+
+        " USDC";
+
+
+      document.getElementById(
+        "entryPrice"
+      ).textContent=
+        entryPrice.toFixed(5)+
+        " USDC";
+
+
+      document.getElementById(
+        "currentPrice"
+      ).textContent=
+        price.toFixed(5)+
+        " USDC";
+
+
+      const tradePnl=
+        document.getElementById(
+          "tradePnl"
+        );
+
+
+      tradePnl.textContent=
+        (pnl>=0?"+":"")+
+        pnl.toFixed(6)+
+        " USDC";
+
+      tradePnl.className=
+        colorClass(pnl);
+
+
+      const tradePnlPct=
+        document.getElementById(
+          "tradePnlPct"
+        );
+
+
+      tradePnlPct.textContent=
+        (pnlPct>=0?"+":"")+
+        pnlPct.toFixed(3)+
+        "%";
+
+      tradePnlPct.className=
+        colorClass(
+          pnlPct
+        );
+
+
+      document.getElementById(
+        "targetPrice"
+      ).textContent=
+        targetPrice.toFixed(5)+
+        " USDC";
+
+    }
+    else{
+
+      tradeBox.style.display=
+        "none";
+    }
+
+
+    // ==========================================
+    // STATUS
+    // ==========================================
+
+    if(
+      bot.realTrading===true &&
+      wallet.tradingKeyReady===true
+    ){
+
+      status.textContent=
+        positions.length>0
+          ? "البوت يعمل · صفقة مفتوحة"
+          : "البوت يعمل · ينتظر فرصة";
+
+      status.className="";
+
+    }
+    else{
+
+      status.textContent=
+        "تحقق من حالة البوت";
+
+      status.className=
+        "error";
+    }
 
 
     document.getElementById(
       "lastUpdate"
-    ).textContent =
+    ).textContent=
       new Date()
         .toLocaleTimeString(
           "ar-SA"
@@ -597,14 +775,12 @@ async function refresh(){
   }
   catch(error){
 
-    console.error(
-      error
-    );
+    console.error(error);
 
-    status.textContent =
+    status.textContent=
       "تعذر الاتصال بالبوت";
 
-    status.className =
+    status.className=
       "error";
   }
 }
