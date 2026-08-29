@@ -2,7 +2,8 @@ name: SOL Auto Trader
 
 on:
   schedule:
-    - cron: "3/5 * * * *"
+    - cron: "*/5 * * * *"
+
   workflow_dispatch:
 
 permissions:
@@ -17,14 +18,53 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Run protected trading cycle
+      - name: Run full auto trading cycle
         env:
           AUTO_TRADER_SECRET: ${{ secrets.AUTO_TRADER_SECRET }}
+
         run: |
-          curl --silent --show-error --fail-with-body \
+          set -euo pipefail
+
+          echo "Starting FAWAZ AUTO TRADER..."
+
+          RESPONSE=$(curl \
+            --silent \
+            --show-error \
+            --fail-with-body \
             --connect-timeout 15 \
             --max-time 50 \
             --retry 2 \
+            --request POST \
             -H "Authorization: Bearer ${AUTO_TRADER_SECRET}" \
+            -H "Content-Type: application/json" \
             -H "Accept: application/json" \
-            "https://fawaz-ai-bot.vercel.app/api/trade-orchestrator"
+            --data '{}' \
+            "https://fawaz-ai-bot.vercel.app/api/trade-orchestrator")
+
+          echo "$RESPONSE"
+
+          ENGINE=$(echo "$RESPONSE" | jq -r '.engine // empty')
+          STATUS=$(echo "$RESPONSE" | jq -r '.status // empty')
+          EXECUTED=$(echo "$RESPONSE" | jq -r '.executed // false')
+
+          if [ "$ENGINE" != "FAWAZ_AUTO_TRADER_V2" ]; then
+            echo "Wrong engine: $ENGINE"
+            exit 1
+          fi
+
+          echo "Engine: $ENGINE"
+          echo "Status: $STATUS"
+          echo "Executed: $EXECUTED"
+
+          if [ "$EXECUTED" = "true" ]; then
+            SIDE=$(echo "$RESPONSE" | jq -r '.result.side // "-"')
+            SLOT=$(echo "$RESPONSE" | jq -r '.result.slotId // "-"')
+            SIGNATURE=$(echo "$RESPONSE" | jq -r '.result.signature // "-"')
+
+            echo "REAL TRADE EXECUTED"
+            echo "Side: $SIDE"
+            echo "Slot: $SLOT"
+            echo "Signature: $SIGNATURE"
+          else
+            echo "No trade executed this cycle."
+          fi
