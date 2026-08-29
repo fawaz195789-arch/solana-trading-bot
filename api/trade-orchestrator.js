@@ -58,8 +58,8 @@ const CONFIG = {
   normalTargetBps: 40,
   fastTargetBps: 55,
 
-  // 18 bps = 0.18% estimated NET profit
-  minNetExitBps: 18,
+// 12 bps = 0.12% estimated NET profit
+  minNetExitBps: 12,
 
   // Emergency protection
   stopLossBps: 40,
@@ -1343,8 +1343,18 @@ async function buildSellCandidates({
         ),
 
       estimatedSellCostBps:
-        exitCosts
-          .estimatedSellCostBps,
+  exitCosts
+    .estimatedSellCostBps,
+
+estimatedSlippageBps:
+  exitCosts
+    .estimatedSlippageBps,
+
+netPnlBps:
+  Number(
+    netPnlBps
+      .toFixed(2)
+  ),
 
       netPnlBps:
         Number(
@@ -2315,13 +2325,8 @@ async function executeApprovedSell({
       amountSol,
 
       slippageBps:
-        clamp(
-          candidate
-            .estimatedSellCostBps,
-          4,
-          CONFIG
-            .maxSlippageBps
-        )
+  candidate
+    .estimatedSlippageBps
     });
 
 
