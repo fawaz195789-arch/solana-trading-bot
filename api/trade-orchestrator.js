@@ -5,15 +5,12 @@
 // GET  = LIVE ANALYSIS ONLY
 // POST = FULL AUTO REAL TRADING CYCLE
 //
-// Flow:
-// ANALYZE
-// -> SELL if an open position must close
-// -> otherwise BUY if approved
-// -> otherwise WAIT
-//
-// Capital: 5 USDC
-// Slots: 4 x 1 USDC
-// Reserve: 1 USDC
+// COMPOUND MODE:
+// Starting capital = 5 USDC
+// 80% trading capital
+// 20% reserve
+// Maximum 4 open slots
+// Realized profits/losses automatically change future slot size
 
 import crypto from "crypto";
 
@@ -38,13 +35,13 @@ import {
 // ======================================================
 
 const CONFIG = {
-  totalCapitalUsd: 5,
+  startingCapitalUsd: 5,
 
   maxSlots: 4,
 
-  slotUsd: 1,
+  reservePct: 0.20,
 
-  reserveUsd: 1,
+  minSlotUsd: 0.25,
 
   calmTargetBps: 30,
 
@@ -61,7 +58,6 @@ const CONFIG = {
 
 
 const SOL_DECIMALS = 9;
-
 const USDC_DECIMALS = 6;
 
 
@@ -69,13 +65,8 @@ const USDC_DECIMALS = 6;
 // HELPERS
 // ======================================================
 
-function num(
-  value,
-  fallback = 0
-) {
-
-  const n =
-    Number(value);
+function num(value, fallback = 0) {
+  const n = Number(value);
 
   return Number.isFinite(n)
     ? n
@@ -83,30 +74,23 @@ function num(
 }
 
 
-function clamp(
-  value,
-  min,
-  max
-) {
-
+function clamp(value, min, max) {
   return Math.max(
     min,
-    Math.min(
-      max,
-      value
-    )
+    Math.min(max, value)
   );
 }
 
 
-function toBps(
-  value
-) {
-
-  return (
-    value *
-    10000
+function roundUsd(value) {
+  return Number(
+    num(value).toFixed(6)
   );
+}
+
+
+function toBps(value) {
+  return value * 10000;
 }
 
 
@@ -114,13 +98,9 @@ function atomicToAmount(
   value,
   decimals
 ) {
-
   return (
     num(value) /
-    Math.pow(
-      10,
-      decimals
-    )
+    Math.pow(10, decimals)
   );
 }
 
@@ -130,19 +110,13 @@ function atomicToAmount(
 // ======================================================
 
 function getWalletAddress() {
-
   const wallet =
-    process.env
-      .BOT_PUBLIC_WALLET ||
-    process.env
-      .BOT_WALLET_ADDRESS ||
-    process.env
-      .SOLANA_WALLET_ADDRESS ||
-    process.env
-      .WALLET_ADDRESS;
+    process.env.BOT_PUBLIC_WALLET ||
+    process.env.BOT_WALLET_ADDRESS ||
+    process.env.SOLANA_WALLET_ADDRESS ||
+    process.env.WALLET_ADDRESS;
 
   if (!wallet) {
-
     throw new Error(
       "BOT_WALLET_ADDRESS_MISSING"
     );
@@ -157,13 +131,10 @@ function getWalletAddress() {
 // ======================================================
 
 function authorize(req) {
-
   const secret =
-    process.env
-      .AUTO_TRADER_SECRET;
+    process.env.AUTO_TRADER_SECRET;
 
   if (!secret) {
-
     return {
       ok: false,
       status: 500,
@@ -172,20 +143,15 @@ function authorize(req) {
     };
   }
 
-
   const auth =
-    req.headers
-      .authorization ||
-    req.headers
-      .Authorization ||
+    req.headers.authorization ||
+    req.headers.Authorization ||
     "";
-
 
   if (
     auth !==
     `Bearer ${secret}`
   ) {
-
     return {
       ok: false,
       status: 401,
@@ -193,7 +159,6 @@ function authorize(req) {
         "UNAUTHORIZED"
     };
   }
-
 
   return {
     ok: true
@@ -206,26 +171,18 @@ function authorize(req) {
 // ======================================================
 
 function getBaseUrl(req) {
-
   if (
-    process.env
-      .APP_BASE_URL
+    process.env.APP_BASE_URL
   ) {
-
     return process.env
       .APP_BASE_URL
-      .replace(
-        /\/$/,
-        ""
-      );
+      .replace(/\/$/, "");
   }
-
 
   if (
     process.env
       .VERCEL_PROJECT_PRODUCTION_URL
   ) {
-
     return (
       "https://" +
       process.env
@@ -233,39 +190,26 @@ function getBaseUrl(req) {
     );
   }
 
-
   if (
-    process.env
-      .VERCEL_URL
+    process.env.VERCEL_URL
   ) {
-
     return (
       "https://" +
-      process.env
-        .VERCEL_URL
+      process.env.VERCEL_URL
     );
   }
-
 
   const host =
     req.headers.host;
 
-
   if (host) {
-
     const protocol =
-      host.includes(
-        "localhost"
-      )
+      host.includes("localhost")
         ? "http"
         : "https";
 
-
-    return (
-      `${protocol}://${host}`
-    );
+    return `${protocol}://${host}`;
   }
-
 
   return (
     "https://fawaz-ai-bot.vercel.app"
@@ -281,45 +225,33 @@ async function fetchJson(
   url,
   options = {}
 ) {
-
   const response =
     await fetch(
       url,
       options
     );
 
-
   const text =
     await response.text();
 
-
   let data;
 
-
   try {
-
     data =
       JSON.parse(text);
-
   } catch {
-
     data = {
       raw: text
     };
   }
 
-
-  if (
-    !response.ok
-  ) {
-
+  if (!response.ok) {
     throw new Error(
       `HTTP_${response.status}:${JSON.stringify(
         data
       )}`
     );
   }
-
 
   return data;
 }
@@ -330,10 +262,8 @@ async function fetchJson(
 // ======================================================
 
 async function loadSignal(req) {
-
   const baseUrl =
     getBaseUrl(req);
-
 
   const data =
     await fetchJson(
@@ -348,18 +278,14 @@ async function loadSignal(req) {
       }
     );
 
-
   if (
-    data?.status !==
-      "ok" ||
+    data?.status !== "ok" ||
     !data?.signal
   ) {
-
     throw new Error(
       "INVALID_SIGNAL_RESPONSE"
     );
   }
-
 
   return data;
 }
@@ -377,23 +303,17 @@ async function executeTrade({
   amountSol = 0,
   slippageBps = 20
 }) {
-
   const baseUrl =
     getBaseUrl(req);
 
-
   const secret =
-    process.env
-      .AUTO_TRADER_SECRET;
-
+    process.env.AUTO_TRADER_SECRET;
 
   if (!secret) {
-
     throw new Error(
       "AUTO_TRADER_SECRET_MISSING"
     );
   }
-
 
   return await fetchJson(
     `${baseUrl}/api/execution-agent`,
@@ -401,7 +321,6 @@ async function executeTrade({
       method: "POST",
 
       headers: {
-
         "Content-Type":
           "application/json",
 
@@ -411,7 +330,6 @@ async function executeTrade({
 
       body:
         JSON.stringify({
-
           side,
 
           slotId,
@@ -423,14 +341,10 @@ async function executeTrade({
           slippageBps:
             clamp(
               Math.floor(
-                num(
-                  slippageBps,
-                  20
-                )
+                num(slippageBps, 20)
               ),
               1,
-              CONFIG
-                .maxSlippageBps
+              CONFIG.maxSlippageBps
             )
         })
     }
@@ -446,60 +360,40 @@ function getDynamicTarget(
   signal,
   riskMode
 ) {
-
   const mode =
     String(
       signal.marketMode ||
       "CALM"
     ).toUpperCase();
 
-
   let target =
-    CONFIG
-      .calmTargetBps;
-
+    CONFIG.calmTargetBps;
 
   if (
-    mode ===
-    "NORMAL"
+    mode === "NORMAL"
   ) {
-
     target =
-      CONFIG
-        .normalTargetBps;
+      CONFIG.normalTargetBps;
   }
 
-
   if (
-    mode ===
-    "FAST"
+    mode === "FAST"
   ) {
-
     target =
-      CONFIG
-        .fastTargetBps;
+      CONFIG.fastTargetBps;
   }
-
 
   if (
-    riskMode ===
-    "FAST"
+    riskMode === "FAST"
   ) {
-
-    target *=
-      1.10;
+    target *= 1.10;
   }
-
 
   if (
-    riskMode ===
-    "DEFENSIVE"
+    riskMode === "DEFENSIVE"
   ) {
-
-    target *=
-      0.80;
+    target *= 0.80;
   }
-
 
   return Math.round(
     clamp(
@@ -512,66 +406,165 @@ function getDynamicTarget(
 
 
 // ======================================================
-// CAPITAL
+// REALIZED PNL
 // ======================================================
 
-function calculateCapital(
-  positions
+function getRealizedPnl(
+  dashboard,
+  recentTrades = []
 ) {
+  const dashboardValues = [
+    dashboard?.totalPnl,
+    dashboard?.total_pnl,
+    dashboard?.realizedPnl,
+    dashboard?.realized_pnl,
+    dashboard?.netPnl,
+    dashboard?.net_pnl,
+    dashboard?.totalProfit,
+    dashboard?.total_profit
+  ];
+
+  for (
+    const value
+    of dashboardValues
+  ) {
+    const n =
+      Number(value);
+
+    if (
+      Number.isFinite(n)
+    ) {
+      return n;
+    }
+  }
+
+  // Fallback if dashboard does not expose total PnL.
+  return recentTrades.reduce(
+    (total, trade) => {
+      const pnl =
+        num(
+          trade?.pnl_usdc ??
+          trade?.pnl ??
+          trade?.net_pnl ??
+          trade?.profit_usdc ??
+          trade?.profit,
+          0
+        );
+
+      return total + pnl;
+    },
+    0
+  );
+}
+
+
+// ======================================================
+// COMPOUND CAPITAL
+// ======================================================
+
+function calculateCapital({
+  positions = [],
+  recentTrades = [],
+  dashboard = {}
+}) {
+  const realizedPnl =
+    getRealizedPnl(
+      dashboard,
+      recentTrades
+    );
+
+  const totalCapital =
+    Math.max(
+      0,
+      CONFIG.startingCapitalUsd +
+      realizedPnl
+    );
+
+  const reserve =
+    totalCapital *
+    CONFIG.reservePct;
+
+  const targetTradableCapital =
+    Math.max(
+      0,
+      totalCapital -
+      reserve
+    );
+
+  const dynamicSlotUsd =
+    targetTradableCapital > 0
+      ? Math.max(
+          CONFIG.minSlotUsd,
+          targetTradableCapital /
+            CONFIG.maxSlots
+        )
+      : 0;
 
   const used =
     positions.reduce(
       (
         total,
         position
-      ) =>
-        total +
-        num(
-          position
-            .entry_usdc
-        ),
+      ) => {
+        return (
+          total +
+          num(
+            position.entry_usdc
+          )
+        );
+      },
       0
     );
-
 
   const free =
     Math.max(
       0,
-      CONFIG
-        .totalCapitalUsd -
+      totalCapital -
       used
     );
 
+  const availableForTrading =
+    Math.max(
+      0,
+      free -
+      reserve
+    );
 
   return {
+    startingCapital:
+      CONFIG.startingCapitalUsd,
+
+    realizedPnl:
+      roundUsd(realizedPnl),
 
     total:
-      CONFIG
-        .totalCapitalUsd,
+      roundUsd(totalCapital),
 
     slotSize:
-      CONFIG
-        .slotUsd,
+      roundUsd(dynamicSlotUsd),
 
     maxSlots:
-      CONFIG
-        .maxSlots,
+      CONFIG.maxSlots,
+
+    reservePct:
+      CONFIG.reservePct,
 
     reserve:
-      CONFIG
-        .reserveUsd,
+      roundUsd(reserve),
 
-    used,
+    used:
+      roundUsd(used),
 
-    free,
+    free:
+      roundUsd(free),
 
     availableForTrading:
-      Math.max(
-        0,
-        free -
-        CONFIG
-          .reserveUsd
-      )
+      roundUsd(
+        availableForTrading
+      ),
+
+    compounding:
+      true
   };
 }
 
@@ -584,29 +577,22 @@ function buildSellCandidates({
   positions,
   currentPrice
 }) {
-
   const candidates = [];
-
 
   for (
     const position
     of positions
   ) {
-
     const entryPrice =
       num(
-        position
-          .entry_price
+        position.entry_price
       );
-
 
     if (
       entryPrice <= 0
     ) {
-
       continue;
     }
-
 
     const pnlBps =
       toBps(
@@ -617,60 +603,45 @@ function buildSellCandidates({
         entryPrice
       );
 
-
     const targetBps =
       num(
-        position
-          .target_bps,
-        CONFIG
-          .normalTargetBps
+        position.target_bps,
+        CONFIG.normalTargetBps
       );
-
 
     let reason =
       null;
 
-
     if (
       pnlBps <=
-      -CONFIG
-        .stopLossBps
+      -CONFIG.stopLossBps
     ) {
-
       reason =
         "STOP_LOSS";
     }
-
 
     if (
       pnlBps >=
       targetBps
     ) {
-
       reason =
         "PROFIT_TARGET";
     }
 
-
     if (!reason) {
-
       continue;
     }
 
-
     candidates.push({
-
       candidateId:
-        crypto
-          .randomUUID(),
+        crypto.randomUUID(),
 
       side:
         "SELL",
 
       slotId:
         Number(
-          position
-            .slot_id
+          position.slot_id
         ),
 
       positionId:
@@ -680,8 +651,7 @@ function buildSellCandidates({
 
       amountSol:
         num(
-          position
-            .entry_sol
+          position.entry_sol
         ),
 
       entryPrice,
@@ -690,8 +660,7 @@ function buildSellCandidates({
 
       pnlBps:
         Number(
-          pnlBps
-            .toFixed(2)
+          pnlBps.toFixed(2)
         ),
 
       targetBps,
@@ -699,11 +668,9 @@ function buildSellCandidates({
       reason,
 
       createdAt:
-        new Date()
-          .toISOString()
+        new Date().toISOString()
     });
   }
-
 
   return candidates;
 }
@@ -718,9 +685,9 @@ async function buildBuyCandidate({
   positions,
   recentTrades,
   signal,
-  riskMode
+  riskMode,
+  capital
 }) {
-
   if (
     String(
       signal.action ||
@@ -728,10 +695,8 @@ async function buildBuyCandidate({
     ).toUpperCase() !==
     "BUY"
   ) {
-
     return null;
   }
-
 
   const freeSlot =
     await getFreeSlot(
@@ -739,35 +704,54 @@ async function buildBuyCandidate({
       CONFIG.maxSlots
     );
 
-
   if (!freeSlot) {
-
     return null;
   }
 
-
-  const capital =
-    calculateCapital(
-      positions
+  const slotUsd =
+    roundUsd(
+      capital.slotSize
     );
 
-
   if (
-    capital
-      .availableForTrading <
-    CONFIG.slotUsd
+    slotUsd <= 0
   ) {
-
     return null;
   }
 
+  if (
+    capital.availableForTrading <
+    slotUsd
+  ) {
+    return {
+      candidateId:
+        crypto.randomUUID(),
+
+      side:
+        "BUY",
+
+      slotId:
+        freeSlot,
+
+      approved:
+        false,
+
+      reason:
+        "INSUFFICIENT_COMPOUND_CAPITAL",
+
+      amountUsd:
+        slotUsd,
+
+      createdAt:
+        new Date().toISOString()
+    };
+  }
 
   const targetBps =
     getDynamicTarget(
       signal,
       riskMode
     );
-
 
   const estimatedSlippageBps =
     Math.max(
@@ -779,40 +763,32 @@ async function buildBuyCandidate({
       )
     );
 
-
   const state = {
-
     totalCapitalUsd:
-      CONFIG
-        .totalCapitalUsd,
+      capital.total,
 
     recentTrades,
 
     slots:
       positions.map(
         position => ({
-
           id:
-            position
-              .slot_id,
+            position.slot_id,
 
           status:
             "OPEN",
 
           amountUsd:
             num(
-              position
-                .entry_usdc
+              position.entry_usdc
             )
         })
       )
   };
 
-
   const candidate = {
-
     amountUsd:
-      CONFIG.slotUsd,
+      slotUsd,
 
     expectedMoveBps:
       targetBps,
@@ -826,40 +802,30 @@ async function buildBuyCandidate({
       0
   };
 
-
   const risk =
     evaluateRisk({
-
       state,
 
       candidate,
 
       config: {
-
         maxOpenSlots:
-          CONFIG
-            .maxSlots,
+          CONFIG.maxSlots,
 
         maxSlippageBps:
-          CONFIG
-            .maxSlippageBps,
+          CONFIG.maxSlippageBps,
 
         minNetEdgeBps:
-          CONFIG
-            .minNetEdgeBps
+          CONFIG.minNetEdgeBps
       }
     });
-
 
   if (
     !risk.allowed
   ) {
-
     return {
-
       candidateId:
-        crypto
-          .randomUUID(),
+        crypto.randomUUID(),
 
       side:
         "BUY",
@@ -874,24 +840,20 @@ async function buildBuyCandidate({
         risk.reason,
 
       amountUsd:
-        CONFIG.slotUsd,
+        slotUsd,
 
       targetBps,
 
       risk,
 
       createdAt:
-        new Date()
-          .toISOString()
+        new Date().toISOString()
     };
   }
 
-
   return {
-
     candidateId:
-      crypto
-        .randomUUID(),
+      crypto.randomUUID(),
 
     signalId:
       signal.signalId ||
@@ -907,18 +869,16 @@ async function buildBuyCandidate({
       true,
 
     amountUsd:
-      CONFIG.slotUsd,
+      slotUsd,
 
     currentPrice:
       num(
-        signal
-          .currentPrice
+        signal.currentPrice
       ),
 
     confidence:
       num(
-        signal
-          .confidence
+        signal.confidence
       ),
 
     targetBps,
@@ -935,8 +895,7 @@ async function buildBuyCandidate({
       "LIVE_BUY_SIGNAL",
 
     createdAt:
-      new Date()
-        .toISOString()
+      new Date().toISOString()
   };
 }
 
@@ -946,45 +905,35 @@ async function buildBuyCandidate({
 // ======================================================
 
 async function analyzeSystem(req) {
-
   const walletAddress =
     getWalletAddress();
 
-
   const signalData =
     await loadSignal(req);
-
 
   const signal =
     signalData?.signal ||
     {};
 
-
   const currentPrice =
     num(
-      signal
-        ?.currentPrice ||
-      signal
-        ?.price ||
+      signal?.currentPrice ||
+      signal?.price ||
       signalData
         ?.market
         ?.price
     );
 
-
   if (
     currentPrice <= 0
   ) {
-
     throw new Error(
       "INVALID_CURRENT_PRICE"
     );
   }
 
-
   signal.currentPrice =
     currentPrice;
-
 
   if (
     !signal.marketMode &&
@@ -992,64 +941,51 @@ async function analyzeSystem(req) {
       ?.market
       ?.mode
   ) {
-
     signal.marketMode =
-      signalData
-        .market
-        .mode;
+      signalData.market.mode;
   }
 
-
   if (
-    signal
-      .scalpingScore ==
+    signal.scalpingScore ==
       null &&
     signalData
       ?.market
       ?.scalpingScore !=
       null
   ) {
-
     signal.scalpingScore =
       signalData
         .market
         .scalpingScore;
   }
 
-
   if (
-    signal
-      .spreadBps ==
+    signal.spreadBps ==
       null &&
     signalData
       ?.market
       ?.spreadBps !=
       null
   ) {
-
     signal.spreadBps =
       signalData
         .market
         .spreadBps;
   }
 
-
   if (
-    signal
-      .volatilityBps ==
+    signal.volatilityBps ==
       null &&
     signalData
       ?.market
       ?.volatilityBps !=
       null
   ) {
-
     signal.volatilityBps =
       signalData
         .market
         .volatilityBps;
   }
-
 
   if (
     !signal.direction &&
@@ -1057,20 +993,18 @@ async function analyzeSystem(req) {
       ?.market
       ?.direction
   ) {
-
     signal.direction =
       signalData
         .market
         .direction;
   }
 
-
   const [
     positions,
-    recentTrades
+    recentTrades,
+    dashboard
   ] =
     await Promise.all([
-
       getOpenPositions(
         walletAddress
       ),
@@ -1078,54 +1012,42 @@ async function analyzeSystem(req) {
       getRecentClosedTrades(
         walletAddress,
         20
+      ),
+
+      getTradingDashboard(
+        walletAddress
       )
     ]);
-
 
   const riskMode =
     getDynamicRiskMode(
       recentTrades
     );
 
-
   const capital =
-    calculateCapital(
-      positions
-    );
-
+    calculateCapital({
+      positions,
+      recentTrades,
+      dashboard
+    });
 
   const buyCandidate =
     await buildBuyCandidate({
-
       walletAddress,
-
       positions,
-
       recentTrades,
-
       signal,
-
-      riskMode
+      riskMode,
+      capital
     });
-
 
   const sellCandidates =
     buildSellCandidates({
-
       positions,
-
       currentPrice
     });
 
-
-  const dashboard =
-    await getTradingDashboard(
-      walletAddress
-    );
-
-
   return {
-
     walletAddress,
 
     signal,
@@ -1158,87 +1080,73 @@ async function executeApprovedBuy({
   analysis,
   requestedSlotId
 }) {
-
   const candidate =
-    analysis
-      .buyCandidate;
-
+    analysis.buyCandidate;
 
   if (
     !candidate ||
-    candidate
-      .approved !== true
+    candidate.approved !== true
   ) {
-
     throw new Error(
       "NO_APPROVED_BUY_CANDIDATE"
     );
   }
 
-
   if (
-    Number(
-      requestedSlotId
-    ) !==
-    Number(
-      candidate.slotId
-    )
+    Number(requestedSlotId) !==
+    Number(candidate.slotId)
   ) {
-
     throw new Error(
       "BUY_SLOT_CHANGED"
     );
   }
 
-
   const existing =
     await getOpenPositionBySlot(
-
-      analysis
-        .walletAddress,
-
-      candidate
-        .slotId
+      analysis.walletAddress,
+      candidate.slotId
     );
 
-
   if (existing) {
-
     throw new Error(
       "SLOT_ALREADY_OPEN"
     );
   }
 
+  const amountUsd =
+    roundUsd(
+      candidate.amountUsd
+    );
+
+  if (
+    amountUsd <= 0
+  ) {
+    throw new Error(
+      "INVALID_COMPOUND_BUY_AMOUNT"
+    );
+  }
 
   const execution =
     await executeTrade({
-
       req,
 
       side:
         "BUY",
 
       slotId:
-        candidate
-          .slotId,
+        candidate.slotId,
 
-      amountUsd:
-        CONFIG
-          .slotUsd,
+      amountUsd,
 
       slippageBps:
         candidate
           .estimatedSlippageBps
     });
 
-
   if (
-    execution
-      ?.executed !== true
+    execution?.executed !== true
   ) {
-
     return {
-
       executed:
         false,
 
@@ -1246,22 +1154,18 @@ async function executeApprovedBuy({
         "BUY",
 
       slotId:
-        candidate
-          .slotId,
+        candidate.slotId,
 
       reason:
-        execution
-          ?.reason ||
+        execution?.reason ||
         "BUY_NOT_EXECUTED",
 
       execution
     };
   }
 
-
   const solReceived =
     atomicToAmount(
-
       execution
         ?.quote
         ?.outAmount,
@@ -1269,47 +1173,36 @@ async function executeApprovedBuy({
       SOL_DECIMALS
     );
 
-
   if (
     solReceived <= 0
   ) {
-
     throw new Error(
       "INVALID_SOL_RECEIVED"
     );
   }
 
-
   const actualEntryPrice =
-    CONFIG.slotUsd /
+    amountUsd /
     solReceived;
 
-
   const targetBps =
-    candidate
-      .targetBps;
-
+    candidate.targetBps;
 
   const trailingDistanceBps =
     Math.max(
       8,
       Math.round(
-        targetBps *
-        0.30
+        targetBps * 0.30
       )
     );
 
-
   const saved =
     await openPosition({
-
       walletAddress:
-        analysis
-          .walletAddress,
+        analysis.walletAddress,
 
       slotId:
-        candidate
-          .slotId,
+        candidate.slotId,
 
       entryPrice:
         actualEntryPrice,
@@ -1318,24 +1211,20 @@ async function executeApprovedBuy({
         solReceived,
 
       entryUsdc:
-        CONFIG
-          .slotUsd,
+        amountUsd,
 
       signature:
-        execution
-          .signature,
+        execution.signature,
 
       strategy:
-        "LIVE_MICRO_SCALP",
+        "LIVE_MICRO_SCALP_COMPOUND",
 
       targetBps,
 
       trailingDistanceBps
     });
 
-
   return {
-
     executed:
       true,
 
@@ -1343,20 +1232,19 @@ async function executeApprovedBuy({
       "BUY",
 
     slotId:
-      candidate
-        .slotId,
+      candidate.slotId,
 
-    amountUsd:
-      CONFIG
-        .slotUsd,
+    amountUsd,
 
     solReceived,
 
     actualEntryPrice,
 
     signature:
-      execution
-        .signature,
+      execution.signature,
+
+    compounding:
+      true,
 
     position:
       saved
@@ -1373,71 +1261,53 @@ async function executeApprovedSell({
   analysis,
   requestedSlotId
 }) {
-
   const slotId =
     Number(
       requestedSlotId
     );
-
 
   const candidate =
     analysis
       .sellCandidates
       .find(
         item =>
-          Number(
-            item.slotId
-          ) ===
+          Number(item.slotId) ===
           slotId
       );
 
-
   if (!candidate) {
-
     throw new Error(
       "NO_APPROVED_SELL_CANDIDATE"
     );
   }
 
-
   const position =
     await getOpenPositionBySlot(
-
-      analysis
-        .walletAddress,
-
+      analysis.walletAddress,
       slotId
     );
 
-
   if (!position) {
-
     throw new Error(
       "OPEN_POSITION_NOT_FOUND"
     );
   }
 
-
   const amountSol =
     num(
-      position
-        .entry_sol
+      position.entry_sol
     );
-
 
   if (
     amountSol <= 0
   ) {
-
     throw new Error(
       "INVALID_POSITION_SOL_AMOUNT"
     );
   }
 
-
   const execution =
     await executeTrade({
-
       req,
 
       side:
@@ -1448,18 +1318,13 @@ async function executeApprovedSell({
       amountSol,
 
       slippageBps:
-        CONFIG
-          .maxSlippageBps
+        CONFIG.maxSlippageBps
     });
 
-
   if (
-    execution
-      ?.executed !== true
+    execution?.executed !== true
   ) {
-
     return {
-
       executed:
         false,
 
@@ -1469,18 +1334,15 @@ async function executeApprovedSell({
       slotId,
 
       reason:
-        execution
-          ?.reason ||
+        execution?.reason ||
         "SELL_NOT_EXECUTED",
 
       execution
     };
   }
 
-
   const usdcReceived =
     atomicToAmount(
-
       execution
         ?.quote
         ?.outAmount,
@@ -1488,42 +1350,33 @@ async function executeApprovedSell({
       USDC_DECIMALS
     );
 
-
   if (
     usdcReceived <= 0
   ) {
-
     throw new Error(
       "INVALID_USDC_RECEIVED"
     );
   }
 
-
   const closed =
     await closePosition({
-
       id:
         position.id,
 
       exitPrice:
-        analysis
-          .currentPrice,
+        analysis.currentPrice,
 
       exitUsdc:
         usdcReceived,
 
       signature:
-        execution
-          .signature,
+        execution.signature,
 
       reason:
-        candidate
-          .reason
+        candidate.reason
     });
 
-
   return {
-
     executed:
       true,
 
@@ -1537,12 +1390,10 @@ async function executeApprovedSell({
     usdcReceived,
 
     reason:
-      candidate
-        .reason,
+      candidate.reason,
 
     signature:
-      execution
-        .signature,
+      execution.signature,
 
     position:
       closed
@@ -1559,19 +1410,13 @@ async function handleGet(
   req,
   res
 ) {
-
   try {
-
     const analysis =
-      await analyzeSystem(
-        req
-      );
-
+      await analyzeSystem(req);
 
     return res
       .status(200)
       .json({
-
         status:
           "ok",
 
@@ -1587,16 +1432,16 @@ async function handleGet(
         execution:
           "FULL_AUTO",
 
+        compounding:
+          true,
+
         walletAddress:
-          analysis
-            .walletAddress,
+          analysis.walletAddress,
 
         capital:
-          analysis
-            .capital,
+          analysis.capital,
 
         signal: {
-
           signalId:
             analysis
               .signal
@@ -1623,8 +1468,7 @@ async function handleGet(
             "-",
 
           currentPrice:
-            analysis
-              .currentPrice,
+            analysis.currentPrice,
 
           marketMode:
             analysis
@@ -1661,39 +1505,30 @@ async function handleGet(
         },
 
         riskMode:
-          analysis
-            .riskMode,
+          analysis.riskMode,
 
         buyCandidate:
-          analysis
-            .buyCandidate,
+          analysis.buyCandidate,
 
         sellCandidates:
-          analysis
-            .sellCandidates,
+          analysis.sellCandidates,
 
         dashboard:
-          analysis
-            .dashboard,
+          analysis.dashboard,
 
         timestamp:
-          new Date()
-            .toISOString()
+          new Date().toISOString()
       });
 
-
   } catch (error) {
-
     console.error(
       "LIVE ANALYSIS ERROR:",
       error
     );
 
-
     return res
       .status(500)
       .json({
-
         status:
           "error",
 
@@ -1706,6 +1541,9 @@ async function handleGet(
         realTrading:
           true,
 
+        compounding:
+          true,
+
         executed:
           false,
 
@@ -1714,8 +1552,7 @@ async function handleGet(
           "Live analysis failed",
 
         timestamp:
-          new Date()
-            .toISOString()
+          new Date().toISOString()
       });
   }
 }
@@ -1730,21 +1567,13 @@ async function handlePost(
   req,
   res
 ) {
-
   const auth =
     authorize(req);
 
-
-  if (
-    !auth.ok
-  ) {
-
+  if (!auth.ok) {
     return res
-      .status(
-        auth.status
-      )
+      .status(auth.status)
       .json({
-
         status:
           "error",
 
@@ -1759,18 +1588,12 @@ async function handlePost(
       });
   }
 
-
   try {
-
     const analysis =
-      await analyzeSystem(
-        req
-      );
-
+      await analyzeSystem(req);
 
     let result =
       null;
-
 
     // ==================================================
     // SELL HAS PRIORITY
@@ -1778,50 +1601,40 @@ async function handlePost(
 
     if (
       Array.isArray(
-        analysis
-          .sellCandidates
+        analysis.sellCandidates
       ) &&
       analysis
         .sellCandidates
         .length > 0
     ) {
-
       const sellCandidate =
-        analysis
-          .sellCandidates[0];
-
+        analysis.sellCandidates[0];
 
       result =
         await executeApprovedSell({
-
           req,
 
           analysis,
 
           requestedSlotId:
             Number(
-              sellCandidate
-                .slotId
+              sellCandidate.slotId
             )
         });
     }
-
 
     // ==================================================
     // OTHERWISE BUY
     // ==================================================
 
     else if (
-      analysis
-        .buyCandidate &&
+      analysis.buyCandidate &&
       analysis
         .buyCandidate
         .approved === true
     ) {
-
       result =
         await executeApprovedBuy({
-
           req,
 
           analysis,
@@ -1835,24 +1648,19 @@ async function handlePost(
         });
     }
 
-
     // ==================================================
     // NOTHING TO DO
     // ==================================================
 
     else {
-
       const dashboard =
         await getTradingDashboard(
-          analysis
-            .walletAddress
+          analysis.walletAddress
         );
-
 
       return res
         .status(200)
         .json({
-
           status:
             "waiting",
 
@@ -1868,6 +1676,9 @@ async function handlePost(
           execution:
             "FULL_AUTO",
 
+          compounding:
+            true,
+
           executed:
             false,
 
@@ -1877,8 +1688,10 @@ async function handlePost(
               ?.reason ||
             "NO_APPROVED_TRADE",
 
-          signal: {
+          capital:
+            analysis.capital,
 
+          signal: {
             action:
               analysis
                 .signal
@@ -1893,8 +1706,7 @@ async function handlePost(
               ),
 
             currentPrice:
-              analysis
-                .currentPrice,
+              analysis.currentPrice,
 
             marketMode:
               analysis
@@ -1910,21 +1722,17 @@ async function handlePost(
           },
 
           buyCandidate:
-            analysis
-              .buyCandidate,
+            analysis.buyCandidate,
 
           sellCandidates:
-            analysis
-              .sellCandidates,
+            analysis.sellCandidates,
 
           dashboard,
 
           timestamp:
-            new Date()
-              .toISOString()
+            new Date().toISOString()
         });
     }
-
 
     // ==================================================
     // RESULT AFTER EXECUTION
@@ -1932,18 +1740,14 @@ async function handlePost(
 
     const dashboard =
       await getTradingDashboard(
-        analysis
-          .walletAddress
+        analysis.walletAddress
       );
-
 
     return res
       .status(200)
       .json({
-
         status:
-          result
-            ?.executed === true
+          result?.executed === true
             ? "ok"
             : "blocked",
 
@@ -1959,32 +1763,32 @@ async function handlePost(
         execution:
           "FULL_AUTO",
 
+        compounding:
+          true,
+
         executed:
-          result
-            ?.executed === true,
+          result?.executed === true,
+
+        capital:
+          analysis.capital,
 
         result,
 
         dashboard,
 
         timestamp:
-          new Date()
-            .toISOString()
+          new Date().toISOString()
       });
 
-
   } catch (error) {
-
     console.error(
       "AUTO TRADING ERROR:",
       error
     );
 
-
     return res
       .status(500)
       .json({
-
         status:
           "error",
 
@@ -2000,6 +1804,9 @@ async function handlePost(
         execution:
           "FULL_AUTO",
 
+        compounding:
+          true,
+
         executed:
           false,
 
@@ -2008,8 +1815,7 @@ async function handlePost(
           "Auto trading failed",
 
         timestamp:
-          new Date()
-            .toISOString()
+          new Date().toISOString()
       });
   }
 }
@@ -2023,35 +1829,27 @@ export default async function handler(
   req,
   res
 ) {
-
   if (
-    req.method ===
-    "GET"
+    req.method === "GET"
   ) {
-
     return handleGet(
       req,
       res
     );
   }
 
-
   if (
-    req.method ===
-    "POST"
+    req.method === "POST"
   ) {
-
     return handlePost(
       req,
       res
     );
   }
 
-
   return res
     .status(405)
     .json({
-
       status:
         "error",
 
