@@ -1,20 +1,15 @@
+تمام. هذا الكود الأول كاملًا trade-orchestrator.js. انسخ الموجود داخل المربع بالكامل واستبدل الملف القديم.
+
 // /api/trade-orchestrator.js
-// FAWAZ AI BOT
-// FULL AUTO ORCHESTRATOR V7
-// 80 SLOTS × 1 USDC
-// WHALE INTELLIGENCE V1
-// STRICT BUY-THE-DIP V1
-// PREDICTIVE VOLATILITY V1
-// ADAPTIVE LEARNING V1
-// PROFIT GUARD V1
-
+// FAWAZ AI TRADER V8 GROWTH PRO
+// Adaptive multi-strategy spot engine for SOL/USDC
 import crypto from "crypto";
-
 import {
   evaluateRisk,
-  getDynamicRiskMode
+  getDynamicRiskMode,
+  calculateDynamicPositionSize,
+  analyzeRecentTrades,
 } from "./risk-agent.js";
-
 import {
   getOpenPositions,
   getFreeSlot,
@@ -23,121 +18,82 @@ import {
   closePosition,
   getRecentClosedTrades,
   getTradingDashboard,
-  updateHighestPrice
+  updatePositionTelemetry,
+  activateTrailing,
+  recordEquitySnapshot,
+  getEquityRiskSnapshot,
+  getPerformanceStats,
+  hasUsedEntrySignal,
+  acquireCycleLock,
+  releaseCycleLock,
+  claimSlot,
+  releaseSlot,
 } from "./trading-store.js";
-
-
-// ======================================================
-// CONFIG
-// ======================================================
-
 const CONFIG = {
-  // Capital
-  reservePct: 0.20,
-  maxCapitalUsagePct: 0.80,
-
-  // Slots
-  maxSlotsCap: 80,
-
-  // Every BUY is exactly 1 USDC
-  fixedSlotUsd: 1.00,
-  minSlotUsd: 1.00,
-
-  // Multi-entry
-  minEntrySpacingBps: 3,
-  minAdditionalEntryConfidence: 52,
-
-  // We no longer force every new position
-  // to be below the lowest previous entry.
-  strictLowerAdditionalEntries: false,
-  strictAddBelowLowestBps: 0,
-
-  // Profit targets
-  calmTargetBps: 30,
-  normalTargetBps: 42,
-  fastTargetBps: 58,
-
-  minNetExitBps: 12,
-  profitSafetyBufferBps: 2,
-
+  // Portfolio
+  maxOpenSlots: 12,
+  maxCapitalUsagePct: 0.50,
+  maxSingleSlotPct: 0.15,
+  baseAllocationPct: 0.06,
+  strongAllocationPct: 0.10,
+  eliteAllocationPct: 0.14,
+  minTradeUsd: 1,
+  lowCapitalTestThresholdUsd: 5,
+  // Entry activity
+  minEntrySpacingBps: 8,
+  minimumEntryScore: 64,
+  strongEntryScore: 74,
+  eliteEntryScore: 84,
+  maxSpreadBps: 15,
+  maxVolatilityBps: 120,
+  minEntryCooldownSeconds: 45,
+  // Edge / execution
+  maxSlippageBps: 30,
+  minNetEdgeBps: 14,
+  executionBufferBps: 6,
+  // Targets
+  targetMinBps: 36,
+  targetMaxBps: 140,
+  trailingMinBps: 14,
+  trailingMaxBps: 36,
+  minLockedProfitBps: 12,
+  extendedProfitMultiple: 2.35,
   // Protection
-  softLossGuardBps: 35,
-  emergencyLossBps: 90,
-  absoluteEmergencyLossBps: 175,
-
+  emergencyLossBps: 100,
+  absoluteEmergencyLossBps: 180,
   emergencyMomentum1mBps: -18,
   emergencyMomentum3mBps: -30,
-
-  maxProtectedPositionsPct: 0.35,
-
-  // Intelligence
-  minimumEntryScore: 56,
-  strongEntryScore: 72,
-  eliteEntryScore: 84,
-  minimumLearningConfidence: 50,
-
-  // Strict dip rules
-  requireDipBeforeBuy: true,
-  minPriorDipMomentumBps: -3,
-  minDipRecoveryBps: 4,
-  chaseMomentumThresholdBps: 3,
-
-  // Prediction
-  minimumPredictionScore: 58,
-  strongPredictionScore: 72,
-
-  predictionWeightMomentum: 0.35,
-  predictionWeightReversal: 0.30,
-  predictionWeightOrderBook: 0.20,
-  predictionWeightVolatility: 0.15,
-
-  predictiveTargetMinBps: 24,
-  predictiveTargetMaxBps: 85,
-
-  // Execution
-  maxSlippageBps: 30,
-  minNetEdgeBps: 10,
-  executionBufferBps: 6
+  // Growth plan
+  monthlyGrowthTargetPct: Number(
+    process.env.MONTHLY_GROWTH_TARGET_PCT || 0.50
+  ),
+  maxGrowthActivityMultiplier: 1.12,
+  // Cycle
+  maxSellsPerCycle: 8,
+  cycleLockSeconds: 50,
 };
-
-
 const SOL_DECIMALS = 9;
 const USDC_DECIMALS = 6;
-
-
 // ======================================================
 // HELPERS
 // ======================================================
-
 function num(value, fallback = 0) {
   const n = Number(value);
-
   return Number.isFinite(n)
     ? n
     : fallback;
 }
-
-
 function clamp(value, min, max) {
   return Math.max(
     min,
     Math.min(max, value)
   );
 }
-
-
-function roundUsd(value) {
+function round(value, digits = 2) {
   return Number(
-    num(value).toFixed(6)
+    num(value).toFixed(digits)
   );
 }
-
-
-function toBps(value) {
-  return value * 10000;
-}
-
-
 function atomicToAmount(
   value,
   decimals
@@ -147,84 +103,55 @@ function atomicToAmount(
     Math.pow(10, decimals)
   );
 }
-
-
-// ======================================================
-// 80 SLOT ENGINE
-// ======================================================
-
-function getDynamicMaxSlots(
-  totalCapitalUsd
+function pctBps(
+  current,
+  entry
 ) {
-  const capital =
-    Math.max(
-      0,
-      num(totalCapitalUsd)
-    );
-
-  const usableCapital =
-    capital *
-    CONFIG.maxCapitalUsagePct;
-
-  const affordableSlots =
-    Math.floor(
-      usableCapital /
-      CONFIG.fixedSlotUsd
-    );
-
-  return Math.max(
-    0,
-    Math.min(
-      CONFIG.maxSlotsCap,
-      affordableSlots
-    )
-  );
+  if (!(entry > 0)) {
+    return 0;
+  }
+  return (
+    (
+      current -
+      entry
+    ) /
+    entry
+  ) * 10000;
 }
-
-
 // ======================================================
 // WALLET
 // ======================================================
-
 function getWalletAddress() {
   const wallet =
     process.env.BOT_PUBLIC_WALLET ||
     process.env.BOT_WALLET_ADDRESS ||
     process.env.SOLANA_WALLET_ADDRESS ||
     process.env.WALLET_ADDRESS;
-
   if (!wallet) {
     throw new Error(
       "BOT_WALLET_ADDRESS_MISSING"
     );
   }
-
   return wallet.trim();
 }
-
-
 // ======================================================
 // AUTH
 // ======================================================
-
 function authorize(req) {
   const secret =
     process.env.AUTO_TRADER_SECRET;
-
   if (!secret) {
     return {
       ok: false,
       status: 500,
       reason:
-        "AUTO_TRADER_SECRET_MISSING"
+        "AUTO_TRADER_SECRET_MISSING",
     };
   }
-
   const auth =
     req.headers.authorization ||
     req.headers.Authorization ||
     "";
-
   if (
     auth !==
     `Bearer ${secret}`
@@ -233,20 +160,16 @@ function authorize(req) {
       ok: false,
       status: 401,
       reason:
-        "UNAUTHORIZED"
+        "UNAUTHORIZED",
     };
   }
-
   return {
-    ok: true
+    ok: true,
   };
 }
-
-
 // ======================================================
 // BASE URL
 // ======================================================
-
 function getBaseUrl(req) {
   if (
     process.env.APP_BASE_URL
@@ -255,7 +178,6 @@ function getBaseUrl(req) {
       .APP_BASE_URL
       .replace(/\/$/, "");
   }
-
   if (
     process.env
       .VERCEL_PROJECT_PRODUCTION_URL
@@ -264,7 +186,6 @@ function getBaseUrl(req) {
       `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
     );
   }
-
   if (
     process.env.VERCEL_URL
   ) {
@@ -272,31 +193,22 @@ function getBaseUrl(req) {
       `https://${process.env.VERCEL_URL}`
     );
   }
-
   const host =
     req.headers.host;
-
   if (host) {
-    const protocol =
-      host.includes("localhost")
-        ? "http"
-        : "https";
-
     return (
-      `${protocol}://${host}`
+      `${host.includes("localhost")
+        ? "http"
+        : "https"}://${host}`
     );
   }
-
   return (
     "https://fawaz-ai-bot.vercel.app"
   );
 }
-
-
 // ======================================================
-// FETCH JSON
+// FETCH
 // ======================================================
-
 async function fetchJson(
   url,
   options = {}
@@ -306,57 +218,42 @@ async function fetchJson(
       url,
       {
         ...options,
-        cache: "no-store"
+        cache: "no-store",
       }
     );
-
   const text =
     await response.text();
-
   let data;
-
   try {
     data =
       JSON.parse(text);
   } catch {
     data = {
-      raw: text
+      raw: text,
     };
   }
-
-  if (
-    !response.ok
-  ) {
+  if (!response.ok) {
     throw new Error(
       `HTTP_${response.status}:${JSON.stringify(data)}`
     );
   }
-
   return data;
 }
-
-
 // ======================================================
 // SIGNAL
 // ======================================================
-
 async function loadSignal(req) {
-  const baseUrl =
-    getBaseUrl(req);
-
   const data =
     await fetchJson(
-      `${baseUrl}/api/signal`,
+      `${getBaseUrl(req)}/api/signal`,
       {
         method: "GET",
-
         headers: {
           Accept:
-            "application/json"
-        }
+            "application/json",
+        },
       }
     );
-
   if (
     data?.status !== "ok" ||
     !data?.signal
@@ -365,34 +262,25 @@ async function loadSignal(req) {
       "INVALID_SIGNAL_RESPONSE"
     );
   }
-
   return data;
 }
-
-
 // ======================================================
-// REAL WALLET SNAPSHOT
+// WALLET SNAPSHOT
 // ======================================================
-
 async function loadWalletSnapshot(
   req
 ) {
-  const baseUrl =
-    getBaseUrl(req);
-
   const data =
     await fetchJson(
-      `${baseUrl}/api/execution-agent?test=wallet`,
+      `${getBaseUrl(req)}/api/execution-agent?test=wallet`,
       {
         method: "GET",
-
         headers: {
           Accept:
-            "application/json"
-        }
+            "application/json",
+        },
       }
     );
-
   if (
     data?.status !== "ok" ||
     data?.tradingKeyReady !== true
@@ -401,72 +289,53 @@ async function loadWalletSnapshot(
       "REAL_WALLET_NOT_READY"
     );
   }
-
   return {
     walletAddress:
       data.walletAddress,
-
     solBalance:
       num(data.solBalance),
-
     usdcBalance:
       num(data.usdcBalance),
-
     source:
       data.balancesSource ||
-      "ON_CHAIN"
+      "ON_CHAIN",
   };
 }
-
-
 // ======================================================
-// REAL TRADE EXECUTION
+// EXECUTION
 // ======================================================
-
 async function executeTrade({
   req,
   side,
   slotId,
   amountUsd = 0,
   amountSol = 0,
-  slippageBps = 20
+  slippageBps = 20,
 }) {
-  const baseUrl =
-    getBaseUrl(req);
-
   const secret =
     process.env
       .AUTO_TRADER_SECRET;
-
   if (!secret) {
     throw new Error(
       "AUTO_TRADER_SECRET_MISSING"
     );
   }
-
-  return await fetchJson(
-    `${baseUrl}/api/execution-agent`,
+  return fetchJson(
+    `${getBaseUrl(req)}/api/execution-agent`,
     {
       method: "POST",
-
       headers: {
         "Content-Type":
           "application/json",
-
         Authorization:
-          `Bearer ${secret}`
+          `Bearer ${secret}`,
       },
-
       body:
         JSON.stringify({
           side,
-
           slotId,
-
           amountUsd,
-
           amountSol,
-
           slippageBps:
             clamp(
               Math.floor(
@@ -477,272 +346,57 @@ async function executeTrade({
               ),
               1,
               CONFIG.maxSlippageBps
-            )
-        })
+            ),
+        }),
     }
   );
 }
-
-
 // ======================================================
-// TRADE PNL
+// NORMALIZE MARKET DATA
 // ======================================================
-
-function getTradePnlBps(
-  trade
+function mergeMarketFields(
+  signalData
 ) {
-  const realizedPnl =
-    num(
-      trade?.realized_pnl,
-      NaN
-    );
-
-  const entryUsdc =
-    num(
-      trade?.entry_usdc,
-      NaN
-    );
-
-  if (
-    Number.isFinite(
-      realizedPnl
-    ) &&
-    Number.isFinite(
-      entryUsdc
-    ) &&
-    entryUsdc > 0
-  ) {
-    return (
-      realizedPnl /
-      entryUsdc
-    ) * 10000;
-  }
-
-  const pct =
-    num(
-      trade?.realized_pnl_pct,
-      NaN
-    );
-
-  if (
-    Number.isFinite(pct)
-  ) {
-    return pct * 100;
-  }
-
-  return 0;
-}
-
-
-// ======================================================
-// LEARNING ENGINE
-// ======================================================
-
-function buildLearningProfile(
-  recentTrades = []
-) {
-  const trades =
-    Array.isArray(
-      recentTrades
-    )
-      ? recentTrades.slice(
-          0,
-          20
-        )
-      : [];
-
-  if (
-    trades.length === 0
-  ) {
-    return {
-      engine:
-        "ADAPTIVE_LEARNING_V1",
-
-      sampleSize: 0,
-      wins: 0,
-      losses: 0,
-      winRate: 0,
-      consecutiveLosses: 0,
-      averagePnlBps: 0,
-
-      minConfidence: 58,
-
-      entryScoreAdjustment: 0,
-
-      sizeMultiplier: 1,
-
-      mode:
-        "LEARNING"
-    };
-  }
-
-  let wins = 0;
-  let losses = 0;
-  let totalPnlBps = 0;
-
-  const values =
-    trades.map(
-      trade => {
-        const pnl =
-          getTradePnlBps(
-            trade
-          );
-
-        totalPnlBps +=
-          pnl;
-
-        if (
-          pnl > 0
-        ) {
-          wins++;
-        } else if (
-          pnl < 0
-        ) {
-          losses++;
-        }
-
-        return pnl;
-      }
-    );
-
-  let consecutiveLosses =
-    0;
-
+  const signal = {
+    ...(signalData?.signal || {}),
+  };
+  const market =
+    signalData?.market ||
+    {};
+  const fields = [
+    "marketMode",
+    "scalpingScore",
+    "spreadBps",
+    "volatilityBps",
+    "momentum1mBps",
+    "momentum3mBps",
+    "momentum5mBps",
+    "orderBookImbalance",
+    "direction",
+  ];
   for (
-    const pnl
-    of values
+    const field
+    of fields
   ) {
     if (
-      pnl < 0
+      signal[field] == null &&
+      market[field] != null
     ) {
-      consecutiveLosses++;
-    } else {
-      break;
+      signal[field] =
+        market[field];
     }
   }
-
-  const winRate =
-    wins /
-    trades.length;
-
-  const averagePnlBps =
-    totalPnlBps /
-    trades.length;
-
-  let minConfidence =
-    56;
-
-  let entryScoreAdjustment =
-    0;
-
-  let mode =
-    "NORMAL";
-
-  if (
-    trades.length >= 5 &&
-    winRate >= 0.82 &&
-    consecutiveLosses === 0 &&
-    averagePnlBps > 0
-  ) {
-    minConfidence =
-      52;
-
-    entryScoreAdjustment =
-      -3;
-
-    mode =
-      "CONFIDENT";
-  }
-
-  if (
-    winRate < 0.70
-  ) {
-    minConfidence =
-      60;
-
-    entryScoreAdjustment =
-      5;
-
-    mode =
-      "CAUTIOUS";
-  }
-
-  if (
-    consecutiveLosses >= 2
-  ) {
-    minConfidence =
-      65;
-
-    entryScoreAdjustment =
-      9;
-
-    mode =
-      "DEFENSIVE";
-  }
-
-  if (
-    consecutiveLosses >= 3
-  ) {
-    minConfidence =
-      70;
-
-    entryScoreAdjustment =
-      14;
-
-    mode =
-      "RECOVERY";
-  }
-
-  return {
-    engine:
-      "ADAPTIVE_LEARNING_V1",
-
-    sampleSize:
-      trades.length,
-
-    wins,
-
-    losses,
-
-    winRate:
-      Number(
-        (
-          winRate *
-          100
-        ).toFixed(2)
-      ),
-
-    consecutiveLosses,
-
-    averagePnlBps:
-      Number(
-        averagePnlBps
-          .toFixed(2)
-      ),
-
-    minConfidence:
-      clamp(
-        minConfidence,
-        CONFIG
-          .minimumLearningConfidence,
-        75
-      ),
-
-    entryScoreAdjustment,
-
-    // Kept for compatibility,
-    // but position size is fixed at $1.
-    sizeMultiplier: 1,
-
-    mode
-  };
+  signal.currentPrice =
+    num(
+      signal.currentPrice ||
+      signal.price ||
+      market.price
+    );
+  return signal;
 }
-
-
 // ======================================================
 // MARKET REGIME
 // ======================================================
-
 function detectMarketRegime(
   signal
 ) {
@@ -750,25 +404,25 @@ function detectMarketRegime(
     num(
       signal.momentum1mBps
     );
-
   const m3 =
     num(
       signal.momentum3mBps
     );
-
-  const volatility =
+  const m5 =
+    num(
+      signal.momentum5mBps
+    );
+  const vol =
     Math.abs(
       num(
         signal.volatilityBps
       )
     );
-
   const direction =
     String(
       signal.direction ||
       ""
     ).toUpperCase();
-
   if (
     (
       m1 <= -18 &&
@@ -778,101 +432,90 @@ function detectMarketRegime(
       direction.includes(
         "DOWN"
       ) &&
-      m3 <= -20
+      m3 <= -22
     )
   ) {
     return {
       regime:
         "STRONG_DOWN",
-
-      riskMultiplier:
-        0.55,
-
-      entryPenalty:
-        20
+      scorePenalty:
+        30,
+      targetMultiplier:
+        0.8,
     };
   }
-
   if (
-    m1 < 0 &&
-    m3 < 0
+    m1 < -4 &&
+    m3 < -8
   ) {
     return {
       regime:
         "DOWN",
-
-      riskMultiplier:
-        0.75,
-
-      entryPenalty:
-        10
+      scorePenalty:
+        12,
+      targetMultiplier:
+        0.9,
     };
   }
-
   if (
-    m1 >= 8 &&
-    m3 >= 5
-  ) {
-    return {
-      regime:
-        "UP",
-
-      riskMultiplier:
-        1,
-
-      entryPenalty:
-        0
-    };
-  }
-
-  if (
-    volatility >= 70
+    vol >= 85
   ) {
     return {
       regime:
         "HIGH_VOLATILITY",
-
-      riskMultiplier:
-        0.75,
-
-      entryPenalty:
-        8
+      scorePenalty:
+        8,
+      targetMultiplier:
+        1.25,
     };
   }
-
+  if (
+    (
+      m1 >= 4 &&
+      m3 >= 2
+    ) ||
+    direction.includes(
+      "UP"
+    ) ||
+    direction.includes(
+      "BULL"
+    )
+  ) {
+    return {
+      regime:
+        "UP",
+      scorePenalty:
+        0,
+      targetMultiplier:
+        1.15,
+    };
+  }
   if (
     Math.abs(m1) <= 8 &&
-    Math.abs(m3) <= 15
+    Math.abs(m3) <= 15 &&
+    Math.abs(m5) <= 25
   ) {
     return {
       regime:
         "RANGE",
-
-      riskMultiplier:
-        1,
-
-      entryPenalty:
-        0
+      scorePenalty:
+        0,
+      targetMultiplier:
+        0.95,
     };
   }
-
   return {
     regime:
       "NORMAL",
-
-    riskMultiplier:
-      0.95,
-
-    entryPenalty:
-      2
+    scorePenalty:
+      2,
+    targetMultiplier:
+      1,
   };
 }
-
-
 // ======================================================
 // EXECUTION COST
 // ======================================================
-
 function estimateExecutionCosts(
   signal
 ) {
@@ -883,7 +526,6 @@ function estimateExecutionCosts(
         signal.spreadBps
       )
     );
-
   const slippage =
     clamp(
       Math.ceil(
@@ -893,68 +535,52 @@ function estimateExecutionCosts(
       4,
       15
     );
-
-  const roundTripCostBps =
-    spread +
-    slippage * 2 +
-    CONFIG.executionBufferBps;
-
   return {
     estimatedSlippageBps:
       slippage,
-
     estimatedRoundTripCostBps:
-      Number(
-        roundTripCostBps
-          .toFixed(2)
-      )
+      round(
+        spread +
+        slippage * 2 +
+        CONFIG.executionBufferBps
+      ),
+    estimatedSellCostBps:
+      round(
+        spread / 2 +
+        slippage +
+        CONFIG.executionBufferBps
+      ),
   };
 }
-
-
 // ======================================================
-// PREDICTIVE VOLATILITY
+// ADAPTIVE STRATEGY ENGINE
 // ======================================================
-
-function buildPredictiveVolatility(
+function buildStrategyScores(
   signal,
-  marketRegime,
-  learning
+  regime,
+  learning,
+  growthPlan
 ) {
-  const hasM1 =
-    signal.momentum1mBps !=
-    null;
-
-  const hasM3 =
-    signal.momentum3mBps !=
-    null;
-
-  const hasM5 =
-    signal.momentum5mBps !=
-    null;
-
+  const confidence =
+    clamp(
+      num(
+        signal.confidence
+      ),
+      0,
+      100
+    );
   const m1 =
     num(
       signal.momentum1mBps
     );
-
   const m3 =
     num(
       signal.momentum3mBps
     );
-
   const m5 =
     num(
       signal.momentum5mBps
     );
-
-  const volatility =
-    Math.abs(
-      num(
-        signal.volatilityBps
-      )
-    );
-
   const imbalance =
     clamp(
       num(
@@ -963,7 +589,6 @@ function buildPredictiveVolatility(
       -1,
       1
     );
-
   const spread =
     Math.max(
       0,
@@ -971,1015 +596,559 @@ function buildPredictiveVolatility(
         signal.spreadBps
       )
     );
-
-  const momentumImprovement =
-    hasM1 &&
-    hasM3
-      ? m1 - m3
-      : 0;
-
-  const priorDip =
-    hasM3 &&
-    m3 <=
-      CONFIG
-        .minPriorDipMomentumBps;
-
-  const recovery =
-    hasM1 &&
-    hasM3 &&
-    priorDip &&
-    m1 >= 0 &&
-    momentumImprovement >=
-      CONFIG.minDipRecoveryBps;
-
-  let momentumModel =
-    50;
-
-  if (
-    hasM1 &&
-    hasM3
-  ) {
-    momentumModel +=
-      clamp(
-        momentumImprovement *
-          1.7,
-        -35,
-        35
-      );
-
-    if (
-      recovery
-    ) {
-      momentumModel +=
-        15;
-    }
-
-    if (
-      m1 >= 0 &&
-      m3 < 0
-    ) {
-      momentumModel +=
-        12;
-    }
-
-    if (
-      m1 >
-        CONFIG
-          .chaseMomentumThresholdBps &&
-      m3 >
-        CONFIG
-          .chaseMomentumThresholdBps
-    ) {
-      momentumModel -=
-        25;
-    }
-
-  } else {
-    momentumModel =
-      20;
-  }
-
-  momentumModel =
-    clamp(
-      momentumModel,
-      0,
-      100
-    );
-
-  let reversalModel =
-    25;
-
-  if (
-    priorDip
-  ) {
-    reversalModel +=
-      25;
-  }
-
-  if (
-    recovery
-  ) {
-    reversalModel +=
-      35;
-  }
-
-  if (
-    m1 >= 0 &&
-    m3 < 0
-  ) {
-    reversalModel +=
-      15;
-  }
-
-  if (
-    marketRegime.regime ===
-    "STRONG_DOWN"
-  ) {
-    reversalModel -=
-      40;
-  }
-
-  reversalModel =
-    clamp(
-      reversalModel,
-      0,
-      100
-    );
-
-  let orderBookModel =
-    50 +
-    imbalance * 40;
-
-  if (
-    spread <= 4
-  ) {
-    orderBookModel +=
-      8;
-  }
-
-  if (
-    spread >= 15
-  ) {
-    orderBookModel -=
-      18;
-  }
-
-  orderBookModel =
-    clamp(
-      orderBookModel,
-      0,
-      100
-    );
-
-  let volatilityModel =
-    45;
-
-  if (
-    volatility >= 8 &&
-    volatility <= 60
-  ) {
-    volatilityModel +=
-      30;
-
-  } else if (
-    volatility > 60 &&
-    volatility <= 90
-  ) {
-    volatilityModel +=
-      10;
-
-  } else if (
-    volatility > 90
-  ) {
-    volatilityModel -=
-      20;
-  }
-
-  if (
-    marketRegime.regime ===
-    "RANGE"
-  ) {
-    volatilityModel +=
-      10;
-  }
-
-  if (
-    marketRegime.regime ===
-    "STRONG_DOWN"
-  ) {
-    volatilityModel -=
-      15;
-  }
-
-  volatilityModel =
-    clamp(
-      volatilityModel,
-      0,
-      100
-    );
-
-  const consensusScore =
-    clamp(
-      momentumModel *
-        CONFIG
-          .predictionWeightMomentum +
-
-      reversalModel *
-        CONFIG
-          .predictionWeightReversal +
-
-      orderBookModel *
-        CONFIG
-          .predictionWeightOrderBook +
-
-      volatilityModel *
-        CONFIG
-          .predictionWeightVolatility,
-
-      0,
-      100
-    );
-
-  let upsideScore =
-    consensusScore;
-
-  if (
-    marketRegime.regime ===
-    "STRONG_DOWN"
-  ) {
-    upsideScore -=
-      15;
-  }
-
-  if (
-    priorDip &&
-    recovery
-  ) {
-    upsideScore +=
-      10;
-  }
-
-  upsideScore =
-    clamp(
-      upsideScore,
-      0,
-      100
-    );
-
-  const expectedSwingBps =
-    clamp(
-      Math.max(
-        CONFIG
-          .predictiveTargetMinBps,
-
-        volatility *
-          0.70 +
-
-        Math.max(
-          0,
-          momentumImprovement
-        ) *
-          0.80
-      ),
-
-      CONFIG
-        .predictiveTargetMinBps,
-
-      CONFIG
-        .predictiveTargetMaxBps
-    );
-
-  const costs =
-    estimateExecutionCosts(
-      signal
-    );
-
-  const expectedNetEdgeBps =
-    expectedSwingBps -
-    costs
-      .estimatedRoundTripCostBps;
-
-  let requiredScore =
-    CONFIG
-      .minimumPredictionScore +
-    num(
-      learning
-        .entryScoreAdjustment
-    ) * 0.5;
-
-  requiredScore =
-    clamp(
-      requiredScore,
-      54,
-      76
-    );
-
-  const chasingUptrend =
-    hasM1 &&
-    hasM3 &&
-    m1 >
-      CONFIG
-        .chaseMomentumThresholdBps &&
-    m3 >
-      CONFIG
-        .chaseMomentumThresholdBps;
-
-  const enoughMomentumData =
-    hasM1 &&
-    hasM3;
-
-  const allowed =
-    enoughMomentumData &&
-    priorDip &&
-    recovery &&
-    consensusScore >=
-      requiredScore &&
-    expectedNetEdgeBps >=
-      CONFIG.minNetEdgeBps &&
-    !chasingUptrend &&
-    marketRegime.regime !==
-      "STRONG_DOWN";
-
-  let reason =
-    "PREDICTIVE_SCORE_TOO_LOW";
-
-  if (
-    !enoughMomentumData
-  ) {
-    reason =
-      "INSUFFICIENT_MOMENTUM_DATA";
-
-  } else if (
-    chasingUptrend
-  ) {
-    reason =
-      "PREDICTIVE_REJECT_CHASING_UPTREND";
-
-  } else if (
-    marketRegime.regime ===
-    "STRONG_DOWN"
-  ) {
-    reason =
-      "PREDICTIVE_REJECT_STRONG_DOWN";
-
-  } else if (
-    !priorDip
-  ) {
-    reason =
-      "WAIT_FOR_REAL_DIP";
-
-  } else if (
-    !recovery
-  ) {
-    reason =
-      "WAIT_FOR_CONFIRMED_REVERSAL";
-
-  } else if (
-    expectedNetEdgeBps <
-    CONFIG.minNetEdgeBps
-  ) {
-    reason =
-      "PREDICTIVE_EDGE_TOO_LOW";
-
-  } else if (
-    allowed
-  ) {
-    reason =
-      "PREDICTIVE_CONSENSUS_APPROVED";
-  }
-
-  return {
-    engine:
-      "PREDICTIVE_VOLATILITY_V1",
-
-    allowed,
-
-    consensusScore:
-      Number(
-        consensusScore.toFixed(2)
-      ),
-
-    requiredScore:
-      Number(
-        requiredScore.toFixed(2)
-      ),
-
-    upsideScore:
-      Number(
-        upsideScore.toFixed(2)
-      ),
-
-    probabilityUpPct:
-      Number(
-        upsideScore.toFixed(2)
-      ),
-
-    expectedSwingBps:
-      Number(
-        expectedSwingBps.toFixed(2)
-      ),
-
-    expectedNetEdgeBps:
-      Number(
-        expectedNetEdgeBps.toFixed(2)
-      ),
-
-    momentumModel:
-      Number(
-        momentumModel.toFixed(2)
-      ),
-
-    reversalModel:
-      Number(
-        reversalModel.toFixed(2)
-      ),
-
-    orderBookModel:
-      Number(
-        orderBookModel.toFixed(2)
-      ),
-
-    volatilityModel:
-      Number(
-        volatilityModel.toFixed(2)
-      ),
-
-    momentum1mBps:
-      m1,
-
-    momentum3mBps:
-      m3,
-
-    momentum5mBps:
-      hasM5
-        ? m5
-        : null,
-
-    momentumImprovementBps:
-      Number(
-        momentumImprovement
-          .toFixed(2)
-      ),
-
-    enoughMomentumData,
-
-    priorDip,
-
-    recovery,
-
-    chasingUptrend,
-
-    marketRegime:
-      marketRegime.regime,
-
-    reason
-  };
-}
-
-
-// ======================================================
-// WHALE ENTRY
-// ======================================================
-
-function evaluateWhaleEntry({
-  signal,
-  learning,
-  marketRegime,
-  predictive
-}) {
-  const confidence =
-    num(
-      signal.confidence
-    );
-
-  const setup =
-    String(
-      signal.setup ||
-      ""
-    ).toUpperCase();
-
-  const direction =
-    String(
-      signal.direction ||
-      ""
-    ).toUpperCase();
-
-  const hasM1 =
-    signal.momentum1mBps !=
-    null;
-
-  const hasM3 =
-    signal.momentum3mBps !=
-    null;
-
-  const m1 =
-    num(
-      signal.momentum1mBps
-    );
-
-  const m3 =
-    num(
-      signal.momentum3mBps
-    );
-
-  const imbalance =
-    num(
-      signal.orderBookImbalance
-    );
-
-  const spread =
-    Math.max(
-      0,
-      num(
-        signal.spreadBps
-      )
-    );
-
-  const volatility =
+  const vol =
     Math.abs(
       num(
         signal.volatilityBps
       )
     );
-
-  const minimumConfidence =
-    Math.max(
-      CONFIG
-        .minimumLearningConfidence,
-
-      num(
-        learning.minConfidence,
-        58
-      )
-    );
-
-  if (
-    !hasM1 ||
-    !hasM3
-  ) {
-    return {
-      engine:
-        "WHALE_INTELLIGENCE_V1",
-
-      allowed:
-        false,
-
-      score:
-        0,
-
-      grade:
-        "WAIT_DATA",
-
-      reason:
-        "INSUFFICIENT_MOMENTUM_DATA",
-
-      confidence,
-
-      minimumConfidence,
-
-      marketRegime:
-        marketRegime.regime,
-
-      predictive,
-
-      evidence: [
-        "STRICT_BUY_THE_DIP_REQUIRES_MOMENTUM_DATA"
-      ]
-    };
-  }
-
-  if (
-    confidence <
-    minimumConfidence
-  ) {
-    return {
-      engine:
-        "WHALE_INTELLIGENCE_V1",
-
-      allowed:
-        false,
-
-      score:
-        0,
-
-      grade:
-        "REJECTED",
-
-      reason:
-        "LEARNING_CONFIDENCE_TOO_LOW",
-
-      confidence,
-
-      minimumConfidence,
-
-      marketRegime:
-        marketRegime.regime,
-
-      predictive,
-
-      evidence: []
-    };
-  }
-
-  if (
-    !predictive ||
-    predictive.allowed !== true
-  ) {
-    return {
-      engine:
-        "WHALE_INTELLIGENCE_V1",
-
-      allowed:
-        false,
-
-      score:
-        0,
-
-      grade:
-        "WAIT_PREDICTION",
-
-      reason:
-        predictive?.reason ||
-        "PREDICTIVE_NOT_READY",
-
-      confidence,
-
-      minimumConfidence,
-
-      marketRegime:
-        marketRegime.regime,
-
-      predictive,
-
-      evidence: [
-        "PREDICTIVE_VOLATILITY_GATE"
-      ]
-    };
-  }
-
-  const priorDip =
-    m3 <=
-    CONFIG
-      .minPriorDipMomentumBps;
-
-  const momentumImprovement =
+  const direction =
+    String(
+      signal.direction ||
+      ""
+    ).toUpperCase();
+  const setupText =
+    String(
+      signal.setup ||
+      ""
+    ).toUpperCase();
+  const improvement =
     m1 - m3;
-
-  const momentumRecovery =
-    m1 >= 0 &&
-    momentumImprovement >=
-      CONFIG.minDipRecoveryBps;
-
-  const chasingUptrend =
-    m1 >
-      CONFIG
-        .chaseMomentumThresholdBps &&
-    m3 >
-      CONFIG
-        .chaseMomentumThresholdBps;
-
-  if (
-    CONFIG.requireDipBeforeBuy &&
-    (
-      !priorDip ||
-      !momentumRecovery ||
-      chasingUptrend
-    )
-  ) {
-    return {
-      engine:
-        "WHALE_INTELLIGENCE_V1",
-
-      allowed:
-        false,
-
-      score:
-        0,
-
-      grade:
-        "WAIT_DIP",
-
-      reason:
-        chasingUptrend
-          ? "DO_NOT_CHASE_RISING_PRICE"
-          : !priorDip
-            ? "WAIT_FOR_REAL_DIP"
-            : "WAIT_FOR_CONFIRMED_REVERSAL",
-
-      confidence,
-
-      minimumConfidence,
-
-      marketRegime:
-        marketRegime.regime,
-
-      momentum1mBps:
-        m1,
-
-      momentum3mBps:
-        m3,
-
-      momentumImprovementBps:
-        Number(
-          momentumImprovement
-            .toFixed(2)
-        ),
-
-      predictive,
-
-      evidence: [
-        "STRICT_BUY_THE_DIP_V1"
-      ]
-    };
-  }
-
-  let score =
-    0;
-
-  const evidence =
-    [];
-
-  score +=
+  const baseQuality =
+    confidence * 0.35 +
     clamp(
-      confidence * 0.35,
-      0,
-      35
+      imbalance * 18,
+      -12,
+      18
+    ) +
+    (
+      spread <= 4
+        ? 8
+        : spread <= 8
+          ? 4
+          : -8
     );
-
-  if (
-    setup.includes("DIP") ||
-    setup.includes("PULLBACK") ||
-    setup.includes("REVERS")
-  ) {
-    score +=
-      15;
-
-    evidence.push(
-      "DIP_OR_REVERSAL_SETUP"
-    );
-  }
-
-  if (
-    priorDip &&
-    momentumRecovery
-  ) {
-    score +=
-      22;
-
-    evidence.push(
-      "CONFIRMED_DIP_RECOVERY"
-    );
-  }
-
-  if (
-    m1 >= 0 &&
-    m3 < 0
-  ) {
-    score +=
-      14;
-
-    evidence.push(
-      "MICRO_REVERSAL_CONFIRMED"
-    );
-  }
-
-  if (
-    imbalance > 0
-  ) {
+  const candidates = [];
+  const add = (
+    name,
+    rawScore,
+    expectedSwingBps,
+    evidence
+  ) => {
+    let score =
+      rawScore -
+      num(
+        regime.scorePenalty
+      );
+    if (
+      learning?.mode ===
+      "DEFENSIVE"
+    ) {
+      score -= 5;
+    }
+    if (
+      learning?.mode ===
+      "CAUTIOUS"
+    ) {
+      score -= 2;
+    }
     score +=
       clamp(
-        imbalance * 10,
-        0,
-        10
+        (
+          num(
+            growthPlan
+              ?.activityMultiplier,
+            1
+          ) -
+          1
+        ) * 20,
+        -3,
+        2.5
       );
-
-    evidence.push(
-      "BUY_PRESSURE"
+    candidates.push({
+      name,
+      score:
+        round(
+          clamp(
+            score,
+            0,
+            100
+          )
+        ),
+      expectedSwingBps:
+        round(
+          clamp(
+            expectedSwingBps,
+            CONFIG.targetMinBps,
+            CONFIG.targetMaxBps *
+              1.25
+          )
+        ),
+      evidence,
+    });
+  };
+  // DIP RECOVERY
+  if (
+    m3 <= -3 &&
+    improvement >= 4 &&
+    m1 >= -1 &&
+    regime.regime !==
+      "STRONG_DOWN"
+  ) {
+    add(
+      "DIP_RECOVERY",
+      baseQuality +
+      28 +
+      clamp(
+        improvement * 1.4,
+        0,
+        22
+      ) +
+      (
+        m1 >= 0
+          ? 8
+          : 0
+      ),
+      42 +
+      vol * 0.65 +
+      Math.max(
+        0,
+        improvement
+      ) * 1.2,
+      [
+        "PRIOR_DIP",
+        "MOMENTUM_IMPROVING",
+        m1 >= 0
+          ? "MICRO_REVERSAL"
+          : "EARLY_RECOVERY",
+      ]
+    );
+  }
+  // RANGE
+  if (
+    regime.regime ===
+      "RANGE" &&
+    m3 <= 2 &&
+    m1 > m3 &&
+    spread <= 8 &&
+    vol <= 65
+  ) {
+    add(
+      "RANGE_MEAN_REVERSION",
+      baseQuality +
+      20 +
+      clamp(
+        improvement * 1.2,
+        0,
+        18
+      ) +
+      (
+        m3 < 0
+          ? 8
+          : 0
+      ),
+      36 +
+      vol * 0.55 +
+      Math.max(
+        0,
+        improvement
+      ),
+      [
+        "RANGE",
+        "MEAN_REVERSION",
+        "LOW_EXECUTION_FRICTION",
+      ]
+    );
+  }
+  // TREND PULLBACK
+  const upContext =
+    direction.includes(
+      "UP"
+    ) ||
+    direction.includes(
+      "BULL"
+    ) ||
+    m5 >= 3;
+  if (
+    upContext &&
+    m3 <= 5 &&
+    improvement >= 2 &&
+    m1 <= 16 &&
+    spread <= 10 &&
+    regime.regime !==
+      "STRONG_DOWN"
+  ) {
+    add(
+      "TREND_PULLBACK",
+      baseQuality +
+      18 +
+      clamp(
+        m5 * 0.5,
+        0,
+        12
+      ) +
+      clamp(
+        improvement,
+        0,
+        12
+      ),
+      48 +
+      vol * 0.70 +
+      Math.max(
+        0,
+        m5
+      ) * 0.5,
+      [
+        "UPTREND_CONTEXT",
+        "PULLBACK_RECOVERY",
+        "ANTI_CHASE_CAP",
+      ]
+    );
+  }
+  // CONTROLLED BREAKOUT
+  if (
+    m1 >= 4 &&
+    m1 <= 20 &&
+    m3 >= 1 &&
+    m3 <= 15 &&
+    imbalance >= 0.10 &&
+    spread <= 7 &&
+    regime.regime !==
+      "HIGH_VOLATILITY"
+  ) {
+    add(
+      "CONTROLLED_BREAKOUT",
+      baseQuality +
+      17 +
+      clamp(
+        m1 * 0.8,
+        0,
+        14
+      ) +
+      clamp(
+        imbalance * 20,
+        0,
+        12
+      ),
+      52 +
+      vol * 0.80 +
+      m1 * 0.7,
+      [
+        "POSITIVE_MOMENTUM",
+        "BUY_PRESSURE",
+        "CONTROLLED_BREAKOUT",
+      ]
+    );
+  }
+  // SIGNAL ASSISTED
+  if (
+    String(
+      signal.action ||
+      ""
+    ).toUpperCase() ===
+      "BUY" &&
+    regime.regime !==
+      "STRONG_DOWN"
+  ) {
+    add(
+      "SIGNAL_ASSISTED",
+      baseQuality +
+      18 +
+      (
+        setupText.includes(
+          "DIP"
+        )
+          ? 7
+          : 0
+      ),
+            40 +
+      vol * 0.60,
+      [
+        "UPSTREAM_BUY_SIGNAL",
+        "INTERNAL_RISK_STILL_REQUIRED"
+      ]
     );
   }
 
+  candidates.sort(
+    (a, b) =>
+      b.score -
+      a.score
+  );
+
+  return candidates;
+}
+
+
+// ======================================================
+// LEARNING PROFILE
+// ======================================================
+
+function buildLearningProfile(
+  recentTrades
+) {
+  const stats =
+    analyzeRecentTrades(
+      recentTrades
+    );
+
+  let mode =
+    "NORMAL";
+
   if (
-    momentumRecovery &&
+    stats.trades < 8
+  ) {
+    mode =
+      "LEARNING";
+
+  } else if (
+    stats.consecutiveLosses >= 3 ||
     (
-      direction.includes("UP") ||
-      direction.includes("BULL")
+      stats.profitFactor !== null &&
+      stats.profitFactor < 0.9
     )
   ) {
-    score +=
-      6;
-
-    evidence.push(
-      "RECOVERY_DIRECTION_UP"
-    );
-  }
-
-  if (
-    spread <= 4
-  ) {
-    score +=
-      7;
-
-    evidence.push(
-      "LOW_SPREAD"
-    );
+    mode =
+      "DEFENSIVE";
 
   } else if (
-    spread <= 8
+    stats.consecutiveLosses >= 2
   ) {
-    score +=
-      4;
-
-    evidence.push(
-      "ACCEPTABLE_SPREAD"
-    );
+    mode =
+      "CAUTIOUS";
 
   } else if (
-    spread >= 15
+    stats.profitFactor !== null &&
+    stats.profitFactor >= 1.5 &&
+    stats.expectancyBps >= 8
   ) {
-    score -=
-      8;
-
-    evidence.push(
-      "HIGH_SPREAD_PENALTY"
-    );
+    mode =
+      "GROWTH";
   }
-
-  if (
-    volatility >= 8 &&
-    volatility <= 60
-  ) {
-    score +=
-      5;
-
-    evidence.push(
-      "HEALTHY_VOLATILITY"
-    );
-  }
-
-  score -=
-    num(
-      marketRegime.entryPenalty
-    );
-
-  const requiredScore =
-    clamp(
-      CONFIG.minimumEntryScore +
-      num(
-        learning
-          .entryScoreAdjustment
-      ),
-
-      50,
-      78
-    );
-
-  score =
-    clamp(
-      score,
-      0,
-      100
-    );
-
-  let grade =
-    "WEAK";
-
-  if (
-    score >=
-    CONFIG.eliteEntryScore
-  ) {
-    grade =
-      "ELITE";
-
-  } else if (
-    score >=
-    CONFIG.strongEntryScore
-  ) {
-    grade =
-      "STRONG";
-
-  } else if (
-    score >=
-    requiredScore
-  ) {
-    grade =
-      "APPROVED";
-  }
-
-  const allowed =
-    score >=
-    requiredScore;
 
   return {
     engine:
-      "WHALE_INTELLIGENCE_V1",
+      "ADAPTIVE_LEARNING_V2",
 
-    allowed,
+    mode,
 
-    score:
-      Number(
-        score.toFixed(2)
+    sampleSize:
+      stats.trades,
+
+    winRatePct:
+      round(
+        stats.winRate *
+        100
       ),
 
-    requiredScore,
+    profitFactor:
+      stats.profitFactor ===
+      Infinity
+        ? 999
+        : stats.profitFactor ===
+          null
+          ? null
+          : round(
+              stats.profitFactor
+            ),
 
-    grade,
-
-    reason:
-      allowed
-        ? "WHALE_DIP_REVERSAL_APPROVED"
-        : "WHALE_ENTRY_REJECTED",
-
-    confidence,
-
-    minimumConfidence,
-
-    marketRegime:
-      marketRegime.regime,
-
-    momentum1mBps:
-      m1,
-
-    momentum3mBps:
-      m3,
-
-    momentumImprovementBps:
-      Number(
-        momentumImprovement
-          .toFixed(2)
+    expectancyBps:
+      round(
+        stats.expectancyBps
       ),
 
-    priorDip,
-
-    momentumRecovery,
-
-    chasingUptrend,
-
-    spreadBps:
-      spread,
-
-    volatilityBps:
-      volatility,
-
-    orderBookImbalance:
-      imbalance,
-
-    predictive,
-
-    evidence
+    consecutiveLosses:
+      stats.consecutiveLosses
   };
 }
 
 
 // ======================================================
-// TARGET
+// GROWTH PLAN
 // ======================================================
 
-function getDynamicTarget(
-  signal,
-  riskMode,
-  predictive = null
+function buildGrowthPlan(
+  equityRisk,
+  performance
 ) {
-  const mode =
-    String(
-      signal.marketMode ||
-      "CALM"
-    ).toUpperCase();
+  const current =
+    num(
+      equityRisk
+        ?.currentEquity
+    );
 
-  let target =
-    CONFIG.calmTargetBps;
+  const start =
+    num(
+      equityRisk
+        ?.start30d,
+      current
+    );
 
-  if (
-    mode === "NORMAL"
-  ) {
-    target =
-      CONFIG.normalTargetBps;
-  }
+  const targetPct =
+    Math.max(
+      0,
+      CONFIG
+        .monthlyGrowthTargetPct
+    );
 
-  if (
-    mode === "FAST"
-  ) {
-    target =
-      CONFIG.fastTargetBps;
-  }
+  const targetEquity =
+    start > 0
+      ? start *
+        (
+          1 +
+          targetPct
+        )
+      : current;
 
-  if (
-    predictive &&
-    predictive.expectedSwingBps >
-      0
-  ) {
-    target =
-      target * 0.45 +
-      predictive
-        .expectedSwingBps *
-        0.55;
-  }
+  const startAt =
+    equityRisk
+      ?.start30dAt
+      ? new Date(
+          equityRisk
+            .start30dAt
+        ).getTime()
+      : Date.now();
 
-  if (
-    riskMode === "FAST"
-  ) {
-    target *=
-      1.08;
-  }
-
-  if (
-    riskMode ===
-    "DEFENSIVE"
-  ) {
-    target *=
-      0.85;
-  }
-
-  return Math.round(
+  const elapsedDays =
     clamp(
-      target,
+      (
+        Date.now() -
+        startAt
+      ) /
+      86_400_000,
+      0,
+      30
+    );
 
-      CONFIG
-        .predictiveTargetMinBps,
+  const expectedNow =
+    start > 0
+      ? start *
+        Math.pow(
+          1 +
+          targetPct,
+          elapsedDays /
+          30
+        )
+      : current;
 
+  const paceGapPct =
+    expectedNow > 0
+      ? (
+          (
+            current -
+            expectedNow
+          ) /
+          expectedNow
+        ) * 100
+      : 0;
+
+  let activityMultiplier =
+    1;
+
+  const pf =
+    num(
+      performance
+        ?.profitFactor,
+      0
+    );
+
+  const expectancy =
+    num(
+      performance
+        ?.expectancyBps,
+      0
+    );
+
+  const drawdown =
+    num(
+      equityRisk
+        ?.drawdownPct,
+      0
+    );
+
+  if (
+    paceGapPct < -3 &&
+    pf >= 1.15 &&
+    expectancy > 0 &&
+    drawdown < 3
+  ) {
+    activityMultiplier =
+      1.06;
+  }
+
+  if (
+    paceGapPct < -7 &&
+    pf >= 1.35 &&
+    expectancy >= 6 &&
+    drawdown < 2
+  ) {
+    activityMultiplier =
       CONFIG
-        .predictiveTargetMaxBps
-    )
-  );
+        .maxGrowthActivityMultiplier;
+  }
+
+  if (
+    paceGapPct > 5
+  ) {
+    activityMultiplier =
+      0.94;
+  }
+
+  if (
+    drawdown >= 3
+  ) {
+    activityMultiplier =
+      Math.min(
+        activityMultiplier,
+        0.90
+      );
+  }
+
+  return {
+    monthlyTargetPct:
+      round(
+        targetPct *
+        100
+      ),
+
+    startEquity:
+      round(
+        start,
+        4
+      ),
+
+    currentEquity:
+      round(
+        current,
+        4
+      ),
+
+    targetEquity:
+      round(
+        targetEquity,
+        4
+      ),
+
+    expectedEquityNow:
+      round(
+        expectedNow,
+        4
+      ),
+
+    paceGapPct:
+      round(
+        paceGapPct
+      ),
+
+    activityMultiplier:
+      round(
+        activityMultiplier,
+        3
+      ),
+
+    note:
+      "Target changes activity modestly; it never overrides drawdown or position-size caps."
+  };
 }
 
 
@@ -1988,7 +1157,7 @@ function getDynamicTarget(
 // ======================================================
 
 function calculateCapital({
-  positions = [],
+  positions,
   walletSnapshot,
   currentPrice
 }) {
@@ -2004,156 +1173,104 @@ function calculateCapital({
   const trackedSolValue =
     positions.reduce(
       (
-        total,
-        position
-      ) => {
-        return (
-          total +
-          num(
-            position.entry_sol
-          ) *
-          currentPrice
-        );
-      },
+        sum,
+        p
+      ) =>
+        sum +
+        num(
+          p.entry_sol
+        ) *
+        currentPrice,
       0
     );
 
-  const trackedNav =
+  const total =
     Math.max(
       0,
       realUsdc +
       trackedSolValue
     );
 
-  const maxSlots =
-    getDynamicMaxSlots(
-      trackedNav
-    );
-
-  const tradableTarget =
-    trackedNav *
-    CONFIG
-      .maxCapitalUsagePct;
-
-  const reserve =
-    trackedNav *
-    CONFIG.reservePct;
-
-  const usedInPositions =
+  const used =
     positions.reduce(
       (
-        total,
-        position
-      ) => {
-        return (
-          total +
-          num(
-            position.entry_usdc
-          )
-        );
-      },
+        sum,
+        p
+      ) =>
+        sum +
+        num(
+          p.entry_usdc
+        ),
       0
     );
 
-  const remainingTradableBudget =
-    Math.max(
-      0,
-      tradableTarget -
-      usedInPositions
-    );
-
-  const cashAboveReserve =
-    Math.max(
-      0,
-      realUsdc -
-      reserve
-    );
+  const maxExposure =
+    total *
+    CONFIG
+      .maxCapitalUsagePct;
 
   const availableForTrading =
     Math.max(
       0,
       Math.min(
-        cashAboveReserve,
-        remainingTradableBudget
+        realUsdc,
+        maxExposure -
+        used
       )
     );
 
-  const exposurePct =
-    trackedNav > 0
-      ? usedInPositions /
-        trackedNav
-      : 0;
-
   return {
     source:
-      "REAL_ON_CHAIN_BALANCE",
+      "REAL_ON_CHAIN_USDC_PLUS_TRACKED_SOL",
 
     realUsdcBalance:
-      roundUsd(
-        realUsdc
+      round(
+        realUsdc,
+        6
       ),
 
     trackedSolValue:
-      roundUsd(
-        trackedSolValue
+      round(
+        trackedSolValue,
+        6
       ),
 
     total:
-      roundUsd(
-        trackedNav
-      ),
-
-    reservePct:
-      CONFIG.reservePct,
-
-    maxCapitalUsagePct:
-      CONFIG
-        .maxCapitalUsagePct,
-
-    reserve:
-      roundUsd(
-        reserve
-      ),
-
-    tradableTarget:
-      roundUsd(
-        tradableTarget
+      round(
+        total,
+        6
       ),
 
     usedInPositions:
-      roundUsd(
-        usedInPositions
+      round(
+        used,
+        6
+      ),
+
+    maxExposureUsd:
+      round(
+        maxExposure,
+        6
       ),
 
     exposurePct:
-      Number(
-        (
-          exposurePct *
-          100
-        ).toFixed(2)
-      ),
-
-    remainingTradableBudget:
-      roundUsd(
-        remainingTradableBudget
-      ),
+      total > 0
+        ? round(
+            (
+              used /
+              total
+            ) * 100
+          )
+        : 0,
 
     availableForTrading:
-      roundUsd(
-        availableForTrading
+      round(
+        availableForTrading,
+        6
       ),
 
-    // Fixed $1 slot
-    targetSlotBudget:
-      CONFIG.fixedSlotUsd,
-
-    fixedSlotUsd:
-      CONFIG.fixedSlotUsd,
-
-    maxSlots,
-
-    maxSlotsCap:
-      CONFIG.maxSlotsCap,
+    maxOpenSlots:
+      CONFIG.maxOpenSlots,
 
     openPositions:
       positions.length,
@@ -2161,397 +1278,151 @@ function calculateCapital({
     remainingSlots:
       Math.max(
         0,
-        maxSlots -
+        CONFIG.maxOpenSlots -
         positions.length
       ),
 
-    compounding:
-      true
+    testMode:
+      total > 0 &&
+      total <=
+      CONFIG
+        .lowCapitalTestThresholdUsd
   };
 }
 
 
 // ======================================================
-// OPEN POSITION RISK
+// ENTRY SPACING
 // ======================================================
 
-function analyzeOpenRisk({
-  positions = [],
-  currentPrice,
-  maxSlots
-}) {
-  let underwaterCount =
-    0;
-
-  let protectedCount =
-    0;
-
-  let worstPnlBps =
-    0;
-
-  for (
-    const position
-    of positions
-  ) {
-    const entryPrice =
-      num(
-        position.entry_price
-      );
-
-    if (
-      entryPrice <= 0
-    ) {
-      continue;
-    }
-
-    const pnlBps =
-      (
-        (
-          currentPrice -
-          entryPrice
-        ) /
-        entryPrice
-      ) *
-      10000;
-
-    if (
-      pnlBps < 0
-    ) {
-      underwaterCount++;
-    }
-
-    if (
-      pnlBps <=
-      -CONFIG
-        .softLossGuardBps
-    ) {
-      protectedCount++;
-    }
-
-    worstPnlBps =
-      Math.min(
-        worstPnlBps,
-        pnlBps
-      );
-  }
-
-  const maxProtectedPositions =
-    Math.max(
-      1,
-      Math.floor(
-        Math.max(
-          maxSlots,
-          1
-        ) *
-        CONFIG
-          .maxProtectedPositionsPct
-      )
-    );
-
-  return {
-    underwaterCount,
-
-    protectedCount,
-
-    maxProtectedPositions,
-
-    worstPnlBps:
-      Number(
-        worstPnlBps
-          .toFixed(2)
-      ),
-
-    allowNewEntry:
-      protectedCount <
-      maxProtectedPositions
-  };
-}
-
-
-// ======================================================
-// FIXED $1 POSITION SIZE
-// ======================================================
-
-function getDynamicEntrySize({
-  availableUsdc,
-  openPositions,
-  maxSlots
-}) {
-  const available =
-    Math.max(
-      0,
-      num(availableUsdc)
-    );
-
-  if (
-    maxSlots <= 0
-  ) {
-    return 0;
-  }
-
-  if (
-    openPositions >=
-    maxSlots
-  ) {
-    return 0;
-  }
-
-  if (
-    available <
-    CONFIG.fixedSlotUsd
-  ) {
-    return 0;
-  }
-
-  return (
-    CONFIG.fixedSlotUsd
-  );
-}
-
-
-// ======================================================
-// SELL COST
-// ======================================================
-
-function estimateSellCostBps(
-  signal
+function evaluateEntrySpacing(
+  positions,
+  currentPrice
 ) {
-  const spread =
-    Math.max(
-      0,
-      num(
-        signal?.spreadBps
-      )
-    );
-
-  const slippage =
-    clamp(
-      Math.ceil(
-        spread / 2 +
-        2
-      ),
-      4,
-      15
-    );
-
-  const estimatedSellCostBps =
-    slippage +
-    spread / 2 +
-    CONFIG.executionBufferBps;
-
-  return {
-    spreadBps:
-      spread,
-
-    estimatedSlippageBps:
-      slippage,
-
-    estimatedSellCostBps:
-      Number(
-        estimatedSellCostBps
-          .toFixed(2)
-      )
-  };
-}
-
-
-// ======================================================
-// MULTI ENTRY
-// ======================================================
-
-function evaluateMultiEntry({
-  positions = [],
-  signal
-}) {
-  const currentPrice =
-    num(
-      signal.currentPrice
-    );
-
   if (
-    currentPrice <= 0
-  ) {
-    return {
-      allowed:
-        false,
-
-      reason:
-        "INVALID_MULTI_ENTRY_PRICE"
-    };
-  }
-
-  if (
-    positions.length === 0
+    !positions.length
   ) {
     return {
       allowed:
         true,
 
       reason:
-        "FIRST_ENTRY",
-
-      entryNumber:
-        1,
-
-      nearestDistanceBps:
-        null
+        "FIRST_ENTRY"
     };
   }
 
-  const entryPrices =
+  const prices =
     positions
       .map(
-        position =>
+        p =>
           num(
-            position.entry_price
+            p.entry_price
           )
       )
       .filter(
-        value =>
-          value > 0
+        x =>
+          x > 0
       );
 
   if (
-    entryPrices.length === 0
+    !prices.length
   ) {
     return {
       allowed:
         true,
 
       reason:
-        "NO_VALID_EXISTING_ENTRY_PRICE",
-
-      entryNumber:
-        positions.length +
-        1
+        "NO_VALID_ENTRY_PRICES"
     };
   }
 
-  const distances =
-    entryPrices.map(
-      entryPrice =>
-        Math.abs(
-          (
-            currentPrice -
-            entryPrice
-          ) /
-          entryPrice
-        ) *
-        10000
-    );
-
-  const nearestDistanceBps =
+  const nearest =
     Math.min(
-      ...distances
+      ...prices.map(
+        p =>
+          Math.abs(
+            (
+              (
+                currentPrice -
+                p
+              ) /
+              p
+            ) *
+            10000
+          )
+      )
     );
 
   if (
-    nearestDistanceBps <
-    CONFIG.minEntrySpacingBps
+    nearest <
+    CONFIG
+      .minEntrySpacingBps
   ) {
     return {
       allowed:
         false,
 
       reason:
-        "ENTRY_TOO_CLOSE_TO_EXISTING_POSITION",
+        "ENTRY_TOO_CLOSE",
 
       nearestDistanceBps:
-        Number(
-          nearestDistanceBps
-            .toFixed(2)
+        round(
+          nearest
         ),
 
-      requiredDistanceBps:
-        CONFIG.minEntrySpacingBps,
-
-      entryNumber:
-        positions.length +
-        1
+      requiredBps:
+        CONFIG
+          .minEntrySpacingBps
     };
   }
 
-  const confidence =
-    num(
-      signal.confidence
-    );
+  const newest =
+    [
+      ...positions
+    ].sort(
+      (
+        a,
+        b
+      ) =>
+        new Date(
+          b.opened_at
+        ).getTime() -
+        new Date(
+          a.opened_at
+        ).getTime()
+    )[0];
+
+  const ageSec =
+    (
+      Date.now() -
+      new Date(
+        newest.opened_at
+      ).getTime()
+    ) /
+    1000;
 
   if (
-    confidence <
+    Number.isFinite(
+      ageSec
+    ) &&
+    ageSec <
     CONFIG
-      .minAdditionalEntryConfidence
+      .minEntryCooldownSeconds
   ) {
     return {
       allowed:
         false,
 
       reason:
-        "ADDITIONAL_ENTRY_CONFIDENCE_TOO_LOW",
+        "ENTRY_COOLDOWN",
 
-      confidence,
-
-      requiredConfidence:
-        CONFIG
-          .minAdditionalEntryConfidence,
-
-      entryNumber:
-        positions.length +
-        1
-    };
-  }
-
-  const lowestEntryPrice =
-    Math.min(
-      ...entryPrices
-    );
-
-  const belowLowestBps =
-    (
-      (
-        lowestEntryPrice -
-        currentPrice
-      ) /
-      lowestEntryPrice
-    ) *
-    10000;
-
-  if (
-    CONFIG
-      .strictLowerAdditionalEntries
-  ) {
-    if (
-      belowLowestBps <
-      CONFIG.strictAddBelowLowestBps
-    ) {
-      return {
-        allowed:
-          false,
-
-        reason:
-          currentPrice >=
-          lowestEntryPrice
-            ? "NEVER_ADD_ABOVE_LOWEST_ENTRY"
-            : "WAIT_FOR_DEEPER_DIP",
-
-        lowestEntryPrice,
-
-        currentPrice,
-
-        belowLowestBps:
-          Number(
-            belowLowestBps
-              .toFixed(2)
-          ),
-
-        requiredBelowBps:
+      retryAfterSeconds:
+        Math.ceil(
           CONFIG
-            .strictAddBelowLowestBps,
-
-        entryNumber:
-          positions.length +
-          1
-      };
-    }
+            .minEntryCooldownSeconds -
+          ageSec
+        )
+    };
   }
 
   return {
@@ -2559,2140 +1430,93 @@ function evaluateMultiEntry({
       true,
 
     reason:
-      "MULTI_ENTRY_APPROVED",
-
-    lowestEntryPrice,
-
-    currentPrice,
-
-    belowLowestBps:
-      Number(
-        belowLowestBps
-          .toFixed(2)
-      ),
+      "ENTRY_SPACING_OK",
 
     nearestDistanceBps:
-      Number(
-        nearestDistanceBps
-          .toFixed(2)
-      ),
-
-    entryNumber:
-      positions.length +
-      1
+      round(
+        nearest
+      )
   };
 }
 
 
 // ======================================================
-// SELL CANDIDATES
+// TARGET + TRAILING
 // ======================================================
 
-async function buildSellCandidates({
-  positions,
-  currentPrice,
-  signal
-}) {
-  const candidates =
-    [];
-
-  const exitCosts =
-    estimateSellCostBps(
-      signal
-    );
-
-  const m1 =
-    num(
-      signal.momentum1mBps
-    );
-
-  const m3 =
-    num(
-      signal.momentum3mBps
-    );
-
-  const direction =
-    String(
-      signal.direction ||
-      ""
-    ).toUpperCase();
-
-  const requiredNetProfitBps =
-    CONFIG.minNetExitBps +
-    CONFIG
-      .profitSafetyBufferBps;
-
-  for (
-    const position
-    of positions
-  ) {
-    const entryPrice =
-      num(
-        position.entry_price
-      );
-
-    if (
-      entryPrice <= 0
-    ) {
-      continue;
-    }
-
-    const grossPnlBps =
-      toBps(
-        (
-          currentPrice -
-          entryPrice
-        ) /
-        entryPrice
-      );
-
-    const netPnlBps =
-      grossPnlBps -
-      exitCosts
-        .estimatedSellCostBps;
-
-    const oldHigh =
-      Math.max(
-        entryPrice,
-
-        num(
-          position.highest_price,
-          entryPrice
-        )
-      );
-
-    const highestPrice =
-      Math.max(
-        oldHigh,
-        currentPrice
-      );
-
-    if (
-      highestPrice >
-      oldHigh
-    ) {
-      await updateHighestPrice({
-        id:
-          position.id,
-
-        highestPrice
-      });
-    }
-
-    let reason =
-      null;
-
-    let protectionMode =
-      "HOLD";
-
-    if (
-      netPnlBps >=
-      requiredNetProfitBps
-    ) {
-      reason =
-        "PROFIT_GUARD_NET_EXIT";
-
-      protectionMode =
-        "TAKE_PROFIT";
-
-    } else {
-      const absoluteEmergency =
-        grossPnlBps <=
-        -CONFIG
-          .absoluteEmergencyLossBps;
-
-      const emergencyLoss =
-        grossPnlBps <=
-        -CONFIG
-          .emergencyLossBps;
-
-      const momentumBreakdown =
-        m1 <=
-          CONFIG
-            .emergencyMomentum1mBps &&
-        m3 <=
-          CONFIG
-            .emergencyMomentum3mBps;
-
-      const directionBreakdown =
-        direction.includes(
-          "DOWN"
-        ) ||
-        direction.includes(
-          "BEAR"
-        );
-
-      if (
-        absoluteEmergency
-      ) {
-        reason =
-          "ABSOLUTE_EMERGENCY_EXIT";
-
-        protectionMode =
-          "EMERGENCY";
-
-      } else if (
-        emergencyLoss &&
-        momentumBreakdown &&
-        directionBreakdown
-      ) {
-        reason =
-          "CONFIRMED_EMERGENCY_EXIT";
-
-        protectionMode =
-          "EMERGENCY";
-      }
-    }
-
-    if (
-      !reason
-    ) {
-      continue;
-    }
-
-    candidates.push({
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "SELL",
-
-      slotId:
-        Number(
-          position.slot_id
-        ),
-
-      positionId:
-        Number(
-          position.id
-        ),
-
-      amountSol:
-        num(
-          position.entry_sol
-        ),
-
-      entryPrice,
-
-      currentPrice,
-
-      highestPrice,
-
-      grossPnlBps:
-        Number(
-          grossPnlBps
-            .toFixed(2)
-        ),
-
-      estimatedSellCostBps:
-        exitCosts
-          .estimatedSellCostBps,
-
-      estimatedSlippageBps:
-        exitCosts
-          .estimatedSlippageBps,
-
-      netPnlBps:
-        Number(
-          netPnlBps
-            .toFixed(2)
-        ),
-
-      requiredNetProfitBps,
-
-      protectionMode,
-
-      reason,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    });
-  }
-
-  return candidates;
-}
-
-
-// ======================================================
-// BUY CANDIDATE
-// ======================================================
-
-async function buildBuyCandidate({
-  walletAddress,
-  positions,
-  recentTrades,
+function getTargetAndTrailing(
+  strategy,
   signal,
-  riskMode,
-  capital,
-  learning,
-  whale,
-  predictive,
-  marketRegime,
-  openRisk
-}) {
-  if (
-    String(
-      signal.action ||
-      "WAIT"
-    ).toUpperCase() !==
-    "BUY"
-  ) {
-    return null;
-  }
-
-  if (
-    capital.maxSlots <= 0
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      approved:
-        false,
-
-      reason:
-        "NO_AFFORDABLE_SLOTS",
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  if (
-    positions.length >=
-    capital.maxSlots
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      approved:
-        false,
-
-      reason:
-        "MAX_OPEN_SLOTS_REACHED",
-
-      maxSlots:
-        capital.maxSlots,
-
-      openPositions:
-        positions.length,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  if (
-    openRisk.allowNewEntry !==
-    true
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      approved:
-        false,
-
-      reason:
-        "LOSS_GUARD_BLOCKING_NEW_ENTRY",
-
-      whale,
-
-      learning,
-
-      openRisk,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  if (
-    whale.allowed !== true
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      approved:
-        false,
-
-      reason:
-        whale.reason,
-
-      whale,
-
-      predictive,
-
-      learning,
-
-      marketRegime,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  const freeSlot =
-    await getFreeSlot(
-      walletAddress,
-      capital.maxSlots
+  regime
+) {
+  const vol =
+    Math.abs(
+      num(
+        signal.volatilityBps
+      )
     );
 
-  if (
-    freeSlot == null
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
+  const strategyBase = {
+    DIP_RECOVERY:
+      48,
 
-      side:
-        "BUY",
+    RANGE_MEAN_REVERSION:
+      40,
 
-      approved:
-        false,
+    TREND_PULLBACK:
+      55,
 
-      reason:
-        "NO_FREE_SLOT",
+    CONTROLLED_BREAKOUT:
+      62,
 
-      maxSlots:
-        capital.maxSlots,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  const multiEntry =
-    evaluateMultiEntry({
-      positions,
-      signal
-    });
-
-  if (
-    !multiEntry.allowed
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      slotId:
-        freeSlot,
-
-      approved:
-        false,
-
-      reason:
-        multiEntry.reason,
-
-      multiEntry,
-
-      whale,
-
-      predictive,
-
-      learning,
-
-      marketRegime,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  const amountUsd =
-    getDynamicEntrySize({
-      availableUsdc:
-        capital
-          .availableForTrading,
-
-      openPositions:
-        positions.length,
-
-      maxSlots:
-        capital.maxSlots
-    });
-
-  if (
-    amountUsd <
-    CONFIG.minSlotUsd
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      slotId:
-        freeSlot,
-
-      approved:
-        false,
-
-      reason:
-        "INSUFFICIENT_REAL_USDC",
-
-      amountUsd,
-
-      fixedSlotUsd:
-        CONFIG.fixedSlotUsd,
-
-      whale,
-
-      predictive,
-
-      learning,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
+    SIGNAL_ASSISTED:
+      45
+  }[
+    strategy.name
+  ] || 45;
 
   const targetBps =
-    getDynamicTarget(
-      signal,
-      riskMode,
-      predictive
+    clamp(
+      (
+        strategyBase +
+        vol * 0.55 +
+        Math.max(
+          0,
+          strategy
+            .expectedSwingBps -
+          strategyBase
+        ) * 0.35
+      ) *
+      num(
+        regime
+          .targetMultiplier,
+        1
+      ),
+
+      CONFIG.targetMinBps,
+
+      CONFIG.targetMaxBps
     );
 
-  const costs =
-    estimateExecutionCosts(
-      signal
+  const trailingDistanceBps =
+    clamp(
+      targetBps *
+      0.28,
+
+      CONFIG.trailingMinBps,
+
+      CONFIG.trailingMaxBps
     );
 
-  const expectedNetEdgeBps =
-    targetBps -
-    costs
-      .estimatedRoundTripCostBps;
+  return {
+    targetBps:
+      Math.round(
+        targetBps
+      ),
 
-  if (
-    expectedNetEdgeBps <
-    CONFIG.minNetEdgeBps
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      slotId:
-        freeSlot,
-
-      approved:
-        false,
-
-      reason:
-        "EXPECTED_NET_EDGE_TOO_LOW",
-
-      amountUsd,
-
-      targetBps,
-
-      expectedNetEdgeBps:
-        Number(
-          expectedNetEdgeBps
-            .toFixed(2)
-        ),
-
-      estimatedSlippageBps:
-        costs
-          .estimatedSlippageBps,
-
-      estimatedRoundTripCostBps:
-        costs
-          .estimatedRoundTripCostBps,
-
-      whale,
-
-      predictive,
-
-      learning,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  const state = {
-    totalCapitalUsd:
-      capital.total,
-
-    recentTrades,
-
-    slots:
-      positions.map(
-        position => ({
-          id:
-            position.slot_id,
-
-          status:
-            "OPEN",
-
-          amountUsd:
-            num(
-              position.entry_usdc
-            )
-        })
+    trailingDistanceBps:
+      Math.round(
+        trailingDistanceBps
       )
   };
-
-  const riskCandidate = {
-    amountUsd,
-
-    expectedMoveBps:
-      targetBps,
-
-    estimatedSlippageBps:
-      costs
-        .estimatedSlippageBps,
-
-    buyFeeBps: 0,
-    sellFeeBps: 0
-  };
-
-  const risk =
-    evaluateRisk({
-      state,
-
-      candidate:
-        riskCandidate,
-
-      config: {
-        maxOpenSlots:
-          capital.maxSlots,
-
-        maxSlippageBps:
-          CONFIG.maxSlippageBps,
-
-        minNetEdgeBps:
-          CONFIG.minNetEdgeBps
-      }
-    });
-
-  if (
-    !risk.allowed
-  ) {
-    return {
-      candidateId:
-        crypto.randomUUID(),
-
-      side:
-        "BUY",
-
-      slotId:
-        freeSlot,
-
-      approved:
-        false,
-
-      reason:
-        risk.reason,
-
-      amountUsd,
-
-      targetBps,
-
-      whale,
-
-      predictive,
-
-      learning,
-
-      marketRegime,
-
-      risk,
-
-      createdAt:
-        new Date()
-          .toISOString()
-    };
-  }
-
-  return {
-    candidateId:
-      crypto.randomUUID(),
-
-    signalId:
-      signal.signalId ||
-      null,
-
-    side:
-      "BUY",
-
-    slotId:
-      freeSlot,
-
-    approved:
-      true,
-
-    entryNumber:
-      positions.length +
-      1,
-
-    // ALWAYS $1
-    amountUsd:
-      CONFIG.fixedSlotUsd,
-
-    fixedSlotUsd:
-      CONFIG.fixedSlotUsd,
-
-    currentPrice:
-      num(
-        signal.currentPrice
-      ),
-
-    confidence:
-      num(
-        signal.confidence
-      ),
-
-    setup:
-      signal.setup ||
-      null,
-
-    whaleScore:
-      whale.score,
-
-    whaleGrade:
-      whale.grade,
-
-    targetBps,
-
-    estimatedSlippageBps:
-      costs
-        .estimatedSlippageBps,
-
-    estimatedRoundTripCostBps:
-      costs
-        .estimatedRoundTripCostBps,
-
-    expectedNetEdgeBps:
-      Number(
-        expectedNetEdgeBps
-          .toFixed(2)
-      ),
-
-    netEdgeBps:
-      risk?.edge
-        ?.netEdgeBps ??
-      expectedNetEdgeBps,
-
-    predictive,
-
-    whale,
-
-    learning,
-
-    marketRegime,
-
-    openRisk,
-
-    multiEntry,
-
-    maxSlots:
-      capital.maxSlots,
-
-    remainingSlots:
-      Math.max(
-        0,
-        capital.maxSlots -
-        positions.length
-      ),
-
-    reason:
-      "WHALE_DIP_ENTRY_APPROVED",
-
-    createdAt:
-      new Date()
-        .toISOString()
-  };
-}
-
-
-// ======================================================
-// ANALYZE SYSTEM
-// ======================================================
-
-async function analyzeSystem(
-  req
-) {
-  const walletAddress =
-    getWalletAddress();
-
-  const [
-    signalData,
-    walletSnapshot
-  ] =
-    await Promise.all([
-      loadSignal(req),
-      loadWalletSnapshot(req)
-    ]);
-
-  if (
-    walletSnapshot
-      .walletAddress !==
-    walletAddress
-  ) {
-    throw new Error(
-      "WALLET_SNAPSHOT_ADDRESS_MISMATCH"
-    );
-  }
-
-  const signal =
-    signalData?.signal ||
-    {};
-
-  const currentPrice =
-    num(
-      signal.currentPrice ||
-      signal.price ||
-      signalData
-        ?.market
-        ?.price
-    );
-
-  if (
-    currentPrice <= 0
-  ) {
-    throw new Error(
-      "INVALID_CURRENT_PRICE"
-    );
-  }
-
-  signal.currentPrice =
-    currentPrice;
-
-  if (
-    !signal.marketMode &&
-    signalData?.market?.mode
-  ) {
-    signal.marketMode =
-      signalData.market.mode;
-  }
-
-  if (
-    signal.scalpingScore ==
-      null &&
-    signalData
-      ?.market
-      ?.scalpingScore != null
-  ) {
-    signal.scalpingScore =
-      signalData
-        .market
-        .scalpingScore;
-  }
-
-  if (
-    signal.spreadBps ==
-      null &&
-    signalData
-      ?.market
-      ?.spreadBps != null
-  ) {
-    signal.spreadBps =
-      signalData
-        .market
-        .spreadBps;
-  }
-
-  if (
-    signal.volatilityBps ==
-      null &&
-    signalData
-      ?.market
-      ?.volatilityBps != null
-  ) {
-    signal.volatilityBps =
-      signalData
-        .market
-        .volatilityBps;
-  }
-
-  if (
-    signal.momentum1mBps ==
-      null &&
-    signalData
-      ?.market
-      ?.momentum1mBps != null
-  ) {
-    signal.momentum1mBps =
-      signalData
-        .market
-        .momentum1mBps;
-  }
-
-  if (
-    signal.momentum3mBps ==
-      null &&
-    signalData
-      ?.market
-      ?.momentum3mBps != null
-  ) {
-    signal.momentum3mBps =
-      signalData
-        .market
-        .momentum3mBps;
-  }
-
-  if (
-    signal.momentum5mBps ==
-      null &&
-    signalData
-      ?.market
-      ?.momentum5mBps != null
-  ) {
-    signal.momentum5mBps =
-      signalData
-        .market
-        .momentum5mBps;
-  }
-
-  if (
-    signal.orderBookImbalance ==
-      null &&
-    signalData
-      ?.market
-      ?.orderBookImbalance != null
-  ) {
-    signal.orderBookImbalance =
-      signalData
-        .market
-        .orderBookImbalance;
-  }
-
-  if (
-    !signal.direction &&
-    signalData
-      ?.market
-      ?.direction
-  ) {
-    signal.direction =
-      signalData
-        .market
-        .direction;
-  }
-
-  const [
-    positions,
-    recentTrades,
-    dashboard
-  ] =
-    await Promise.all([
-      getOpenPositions(
-        walletAddress
-      ),
-
-      getRecentClosedTrades(
-        walletAddress,
-        20
-      ),
-
-      getTradingDashboard(
-        walletAddress
-      )
-    ]);
-
-  const riskMode =
-    getDynamicRiskMode(
-      recentTrades
-    );
-
-  const learning =
-    buildLearningProfile(
-      recentTrades
-    );
-
-  const marketRegime =
-    detectMarketRegime(
-      signal
-    );
-
-  const capital =
-    calculateCapital({
-      positions,
-      walletSnapshot,
-      currentPrice
-    });
-
-  const openRisk =
-    analyzeOpenRisk({
-      positions,
-      currentPrice,
-
-      maxSlots:
-        capital.maxSlots
-    });
-
-  const predictive =
-    buildPredictiveVolatility(
-      signal,
-      marketRegime,
-      learning
-    );
-
-  const whale =
-    evaluateWhaleEntry({
-      signal,
-      learning,
-      marketRegime,
-      predictive
-    });
-
-  const buyCandidate =
-    await buildBuyCandidate({
-      walletAddress,
-
-      positions,
-
-      recentTrades,
-
-      signal,
-
-      riskMode,
-
-      capital,
-
-      learning,
-
-      whale,
-
-      predictive,
-
-      marketRegime,
-
-      openRisk
-    });
-
-  const sellCandidates =
-    await buildSellCandidates({
-      positions,
-      currentPrice,
-      signal
-    });
-
-  return {
-    walletAddress,
-
-    walletSnapshot,
-
-    signal,
-
-    currentPrice,
-
-    positions,
-
-    recentTrades,
-
-    riskMode,
-
-    learning,
-
-    whale,
-
-    predictive,
-
-    marketRegime,
-
-    openRisk,
-
-    capital,
-
-    buyCandidate,
-
-    sellCandidates,
-
-    dashboard
-  };
-}
-
-
-// ======================================================
-// EXECUTE BUY
-// ======================================================
-
-async function executeApprovedBuy({
-  req,
-  analysis,
-  requestedSlotId
-}) {
-  const candidate =
-    analysis.buyCandidate;
-
-  if (
-    !candidate ||
-    candidate.approved !== true
-  ) {
-    throw new Error(
-      "NO_APPROVED_BUY_CANDIDATE"
-    );
-  }
-
-  if (
-    Number(
-      requestedSlotId
-    ) !==
-    Number(
-      candidate.slotId
-    )
-  ) {
-    throw new Error(
-      "BUY_SLOT_CHANGED"
-    );
-  }
-
-  const existing =
-    await getOpenPositionBySlot(
-      analysis.walletAddress,
-      candidate.slotId
-    );
-
-  if (
-    existing
-  ) {
-    throw new Error(
-      "SLOT_ALREADY_OPEN"
-    );
-  }
-
-  // Hard fixed position amount.
-  const amountUsd =
-    CONFIG.fixedSlotUsd;
-
-  if (
-    amountUsd !== 1
-  ) {
-    throw new Error(
-      "FIXED_SLOT_AMOUNT_INVALID"
-    );
-  }
-
-  const freshWallet =
-    await loadWalletSnapshot(
-      req
-    );
-
-  if (
-    freshWallet.usdcBalance <
-    amountUsd
-  ) {
-    throw new Error(
-      "BUY_EXCEEDS_REAL_USDC_BALANCE"
-    );
-  }
-
-  const execution =
-    await executeTrade({
-      req,
-
-      side:
-        "BUY",
-
-      slotId:
-        candidate.slotId,
-
-      amountUsd,
-
-      slippageBps:
-        candidate
-          .estimatedSlippageBps
-    });
-
-  if (
-    execution?.executed !== true
-  ) {
-    return {
-      executed:
-        false,
-
-      side:
-        "BUY",
-
-      slotId:
-        candidate.slotId,
-
-      reason:
-        execution?.reason ||
-        "BUY_NOT_EXECUTED",
-
-      execution
-    };
-  }
-
-  const solReceived =
-    atomicToAmount(
-      execution?.quote?.outAmount,
-      SOL_DECIMALS
-    );
-
-  if (
-    solReceived <= 0
-  ) {
-    throw new Error(
-      "INVALID_SOL_RECEIVED"
-    );
-  }
-
-  const actualEntryPrice =
-    amountUsd /
-    solReceived;
-
-  const saved =
-    await openPosition({
-      walletAddress:
-        analysis.walletAddress,
-
-      slotId:
-        candidate.slotId,
-
-      entryPrice:
-        actualEntryPrice,
-
-      entrySol:
-        solReceived,
-
-      entryUsdc:
-        amountUsd,
-
-      signature:
-        execution.signature,
-
-      strategy:
-        "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-      targetBps:
-        candidate.targetBps,
-
-      trailingDistanceBps:
-        null
-    });
-
-  return {
-    executed:
-      true,
-
-    engine:
-      "FAWAZ_80X1_ENGINE_V1",
-
-    side:
-      "BUY",
-
-    slotId:
-      candidate.slotId,
-
-    entryNumber:
-      candidate.entryNumber,
-
-    amountUsd,
-
-    solReceived,
-
-    actualEntryPrice,
-
-    whaleScore:
-      candidate.whaleScore,
-
-    whaleGrade:
-      candidate.whaleGrade,
-
-    predictionScore:
-      analysis.predictive
-        ?.consensusScore ??
-      null,
-
-    probabilityUpPct:
-      analysis.predictive
-        ?.probabilityUpPct ??
-      null,
-
-    learningMode:
-      analysis.learning.mode,
-
-    marketRegime:
-      analysis.marketRegime
-        .regime,
-
-    maxSlots:
-      analysis.capital.maxSlots,
-
-    fixedSlotUsd:
-      CONFIG.fixedSlotUsd,
-
-    signature:
-      execution.signature,
-
-    compounding:
-      true,
-
-    position:
-      saved
-  };
-}
-
-
-// ======================================================
-// EXECUTE SELL
-// ======================================================
-
-async function executeApprovedSell({
-  req,
-  analysis,
-  requestedSlotId
-}) {
-  const slotId =
-    Number(
-      requestedSlotId
-    );
-
-  const candidate =
-    analysis
-      .sellCandidates
-      .find(
-        item =>
-          Number(
-            item.slotId
-          ) ===
-          slotId
-      );
-
-  if (
-    !candidate
-  ) {
-    throw new Error(
-      "NO_APPROVED_SELL_CANDIDATE"
-    );
-  }
-
-  const position =
-    await getOpenPositionBySlot(
-      analysis.walletAddress,
-      slotId
-    );
-
-  if (
-    !position
-  ) {
-    throw new Error(
-      "OPEN_POSITION_NOT_FOUND"
-    );
-  }
-
-  const amountSol =
-    num(
-      position.entry_sol
-    );
-
-  if (
-    amountSol <= 0
-  ) {
-    throw new Error(
-      "INVALID_POSITION_SOL_AMOUNT"
-    );
-  }
-
-  const emergency =
-    candidate.reason ===
-      "CONFIRMED_EMERGENCY_EXIT" ||
-    candidate.reason ===
-      "ABSOLUTE_EMERGENCY_EXIT";
-
-  if (
-    !emergency &&
-    candidate.netPnlBps <
-      candidate
-        .requiredNetProfitBps
-  ) {
-    throw new Error(
-      "PROFIT_GUARD_BLOCKED_LOSS_SELL"
-    );
-  }
-
-  const execution =
-    await executeTrade({
-      req,
-
-      side:
-        "SELL",
-
-      slotId,
-
-      amountSol,
-
-      slippageBps:
-        candidate
-          .estimatedSlippageBps
-    });
-
-  if (
-    execution?.executed !== true
-  ) {
-    return {
-      executed:
-        false,
-
-      side:
-        "SELL",
-
-      slotId,
-
-      reason:
-        execution?.reason ||
-        "SELL_NOT_EXECUTED",
-
-      execution
-    };
-  }
-
-  const usdcReceived =
-    atomicToAmount(
-      execution?.quote?.outAmount,
-      USDC_DECIMALS
-    );
-
-  if (
-    usdcReceived <= 0
-  ) {
-    throw new Error(
-      "INVALID_USDC_RECEIVED"
-    );
-  }
-
-  const actualExitPrice =
-    usdcReceived /
-    amountSol;
-
-  const closed =
-    await closePosition({
-      id:
-        position.id,
-
-      exitPrice:
-        actualExitPrice,
-
-      exitUsdc:
-        usdcReceived,
-
-      signature:
-        execution.signature,
-
-      reason:
-        candidate.reason
-    });
-
-  return {
-    executed:
-      true,
-
-    engine:
-      "PROFIT_GUARD_V1",
-
-    side:
-      "SELL",
-
-    slotId,
-
-    amountSol,
-
-    usdcReceived,
-
-    actualExitPrice,
-
-    grossPnlBps:
-      candidate.grossPnlBps,
-
-    estimatedNetPnlBps:
-      candidate.netPnlBps,
-
-    requiredNetProfitBps:
-      candidate
-        .requiredNetProfitBps,
-
-    protectionMode:
-      candidate
-        .protectionMode,
-
-    realizedPnl:
-      num(
-        closed?.realized_pnl
-      ),
-
-    realizedPnlPct:
-      num(
-        closed
-          ?.realized_pnl_pct
-      ),
-
-    reason:
-      candidate.reason,
-
-    signature:
-      execution.signature,
-
-    compounding:
-      true,
-
-    position:
-      closed
-  };
-}
-
-
-// ======================================================
-// GET = ANALYSIS
-// ======================================================
-
-async function handleGet(
-  req,
-  res
-) {
-  try {
-    const analysis =
-      await analyzeSystem(
-        req
-      );
-
-    return res
-      .status(200)
-      .json({
-        status:
-          "ok",
-
-        engine:
-          "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-        strategy:
-          "80_SLOTS_FIXED_1_USDC_PREDICTIVE_DIP",
-
-        modules: {
-          slots:
-            "80",
-
-          fixedPositionSize:
-            "1_USDC",
-
-          whaleIntelligence:
-            "V1",
-
-          strictBuyTheDip:
-            "V1",
-
-          predictiveVolatility:
-            "V1",
-
-          adaptiveLearning:
-            "V1",
-
-          marketRegime:
-            "V1",
-
-          profitGuard:
-            "V1",
-
-          lossReduction:
-            "V1"
-        },
-
-        liveMarket:
-          true,
-
-        realTrading:
-          true,
-
-        execution:
-          "FULL_AUTO",
-
-        compounding:
-          true,
-
-        configuration: {
-          maxSlotsCap:
-            CONFIG.maxSlotsCap,
-
-          fixedSlotUsd:
-            CONFIG.fixedSlotUsd,
-
-          reservePct:
-            CONFIG.reservePct,
-
-          maxCapitalUsagePct:
-            CONFIG
-              .maxCapitalUsagePct,
-
-          minEntrySpacingBps:
-            CONFIG
-              .minEntrySpacingBps
-        },
-
-        walletAddress:
-          analysis.walletAddress,
-
-        wallet:
-          analysis.walletSnapshot,
-
-        capital:
-          analysis.capital,
-
-        signal: {
-          signalId:
-            analysis.signal
-              .signalId ||
-            null,
-
-          action:
-            analysis.signal
-              .action ||
-            "WAIT",
-
-          confidence:
-            num(
-              analysis.signal
-                .confidence
-            ),
-
-          reason:
-            analysis.signal
-              .reason ||
-            "-",
-
-          setup:
-            analysis.signal
-              .setup ||
-            null,
-
-          currentPrice:
-            analysis.currentPrice,
-
-          marketMode:
-            analysis.signal
-              .marketMode ||
-            "-",
-
-          scalpingScore:
-            num(
-              analysis.signal
-                .scalpingScore
-            ),
-
-          spreadBps:
-            num(
-              analysis.signal
-                .spreadBps
-            ),
-
-          volatilityBps:
-            num(
-              analysis.signal
-                .volatilityBps
-            ),
-
-          momentum1mBps:
-            num(
-              analysis.signal
-                .momentum1mBps
-            ),
-
-          momentum3mBps:
-            num(
-              analysis.signal
-                .momentum3mBps
-            ),
-
-          momentum5mBps:
-            analysis.signal
-              .momentum5mBps ==
-            null
-              ? null
-              : num(
-                  analysis.signal
-                    .momentum5mBps
-                ),
-
-          orderBookImbalance:
-            num(
-              analysis.signal
-                .orderBookImbalance
-            ),
-
-          direction:
-            analysis.signal
-              .direction ||
-            "-"
-        },
-
-        riskMode:
-          analysis.riskMode,
-
-        learning:
-          analysis.learning,
-
-        whale:
-          analysis.whale,
-
-        predictive:
-          analysis.predictive,
-
-        marketRegime:
-          analysis.marketRegime,
-
-        openRisk:
-          analysis.openRisk,
-
-        buyCandidate:
-          analysis.buyCandidate,
-
-        sellCandidates:
-          analysis.sellCandidates,
-
-        dashboard:
-          analysis.dashboard,
-
-        timestamp:
-          new Date()
-            .toISOString()
-      });
-
-  } catch (
-    error
-  ) {
-    console.error(
-      "80X1 ANALYSIS ERROR:",
-      error
-    );
-
-    return res
-      .status(500)
-      .json({
-        status:
-          "error",
-
-        engine:
-          "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-        liveMarket:
-          true,
-
-        realTrading:
-          true,
-
-        executed:
-          false,
-
-        message:
-          error?.message ||
-          "Analysis failed",
-
-        timestamp:
-          new Date()
-            .toISOString()
-      });
-  }
-}
-
-
-// ======================================================
-// POST = REAL AUTO TRADE
-// ======================================================
-
-async function handlePost(
-  req,
-  res
-) {
-  const auth =
-    authorize(req);
-
-  if (
-    !auth.ok
-  ) {
-    return res
-      .status(
-        auth.status
-      )
-      .json({
-        status:
-          "error",
-
-        executed:
-          false,
-
-        engine:
-          "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-        message:
-          auth.reason
-      });
-  }
-
-  try {
-    const analysis =
-      await analyzeSystem(
-        req
-      );
-
-    let result =
-      null;
-
-    // SELL gets priority.
-    if (
-      Array.isArray(
-        analysis.sellCandidates
-      ) &&
-      analysis
-        .sellCandidates
-        .length > 0
-    ) {
-      const priority = {
-        ABSOLUTE_EMERGENCY_EXIT:
-          1,
-
-        CONFIRMED_EMERGENCY_EXIT:
-          2,
-
-        PROFIT_GUARD_NET_EXIT:
-          3
-      };
-
-      analysis
-        .sellCandidates
-        .sort(
-          (
-            a,
-            b
-          ) =>
-            (
-              priority[a.reason] ||
-              99
-            ) -
-            (
-              priority[b.reason] ||
-              99
-            )
-        );
-
-      const sellCandidate =
-        analysis
-          .sellCandidates[0];
-
-      result =
-        await executeApprovedSell({
-          req,
-
-          analysis,
-
-          requestedSlotId:
-            sellCandidate.slotId
-        });
-
-    } else if (
-      analysis
-        .buyCandidate
-        ?.approved === true
-    ) {
-      result =
-        await executeApprovedBuy({
-          req,
-
-          analysis,
-
-          requestedSlotId:
-            analysis
-              .buyCandidate
-              .slotId
-        });
-
-    } else {
-      const dashboard =
-        await getTradingDashboard(
-          analysis.walletAddress
-        );
-
-      return res
-        .status(200)
-        .json({
-          status:
-            "waiting",
-
-          engine:
-            "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-          strategy:
-            "80_SLOTS_FIXED_1_USDC_PREDICTIVE_DIP",
-
-          liveMarket:
-            true,
-
-          realTrading:
-            true,
-
-          execution:
-            "FULL_AUTO",
-
-          compounding:
-            true,
-
-          executed:
-            false,
-
-          configuration: {
-            maxSlotsCap:
-              CONFIG.maxSlotsCap,
-
-            fixedSlotUsd:
-              CONFIG.fixedSlotUsd
-          },
-
-          reason:
-            analysis
-              .buyCandidate
-              ?.reason ||
-            analysis.signal
-              ?.reason ||
-            "NO_APPROVED_TRADE",
-
-          wallet:
-            analysis.walletSnapshot,
-
-          capital:
-            analysis.capital,
-
-          learning:
-            analysis.learning,
-
-          whale:
-            analysis.whale,
-
-          predictive:
-            analysis.predictive,
-
-          marketRegime:
-            analysis.marketRegime,
-
-          openRisk:
-            analysis.openRisk,
-
-          signal: {
-            action:
-              analysis.signal
-                ?.action ||
-              "WAIT",
-
-            confidence:
-              num(
-                analysis.signal
-                  ?.confidence
-              ),
-
-            setup:
-              analysis.signal
-                ?.setup ||
-              null,
-
-            currentPrice:
-              analysis.currentPrice,
-
-            marketMode:
-              analysis.signal
-                ?.marketMode ||
-              "-",
-
-            direction:
-              analysis.signal
-                ?.direction ||
-              "-"
-          },
-
-          buyCandidate:
-            analysis.buyCandidate,
-
-          sellCandidates:
-            analysis.sellCandidates,
-
-          dashboard,
-
-          timestamp:
-            new Date()
-              .toISOString()
-        });
-    }
-
-    const dashboard =
-      await getTradingDashboard(
-        analysis.walletAddress
-      );
-
-    return res
-      .status(200)
-      .json({
-        status:
-          result?.executed === true
-            ? "ok"
-            : "blocked",
-
-        engine:
-          "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-        strategy:
-          "80_SLOTS_FIXED_1_USDC_PREDICTIVE_DIP",
-
-        liveMarket:
-          true,
-
-        realTrading:
-          true,
-
-        execution:
-          "FULL_AUTO",
-
-        compounding:
-          true,
-
-        executed:
-          result?.executed === true,
-
-        configuration: {
-          maxSlotsCap:
-            CONFIG.maxSlotsCap,
-
-          fixedSlotUsd:
-            CONFIG.fixedSlotUsd
-        },
-
-        capital:
-          analysis.capital,
-
-        learning:
-          analysis.learning,
-
-        whale:
-          analysis.whale,
-
-        predictive:
-          analysis.predictive,
-
-        marketRegime:
-          analysis.marketRegime,
-
-        openRisk:
-          analysis.openRisk,
-
-        result,
-
-        dashboard,
-
-        timestamp:
-          new Date()
-            .toISOString()
-      });
-
-  } catch (
-    error
-  ) {
-    console.error(
-      "80X1 AUTO TRADING ERROR:",
-      error
-    );
-
-    return res
-      .status(500)
-      .json({
-        status:
-          "error",
-
-        engine:
-          "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-        strategy:
-          "80_SLOTS_FIXED_1_USDC_PREDICTIVE_DIP",
-
-        liveMarket:
-          true,
-
-        realTrading:
-          true,
-
-        execution:
-          "FULL_AUTO",
-
-        compounding:
-          true,
-
-        executed:
-          false,
-
-        message:
-          error?.message ||
-          "Auto trading failed",
-
-        timestamp:
-          new Date()
-            .toISOString()
-      });
-  }
-}
-
-
-// ======================================================
-// HANDLER
-// ======================================================
-
-export default async function handler(
-  req,
-  res
-) {
-  if (
-    req.method === "GET"
-  ) {
-    return handleGet(
-      req,
-      res
-    );
-  }
-
-  if (
-    req.method === "POST"
-  ) {
-    return handlePost(
-      req,
-      res
-    );
-  }
-
-  return res
-    .status(405)
-    .json({
-      status:
-        "error",
-
-      engine:
-        "FAWAZ_80X1_WHALE_PREDICTIVE_V1",
-
-      message:
-        "GET or POST only"
-    });
 }
