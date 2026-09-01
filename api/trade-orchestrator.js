@@ -2589,5 +2589,672 @@ async function executeApprovedBuy({
         strategy:
           `V8_${candidate.strategy}`,
 
-        targetBps:
-          candidate.target
+                targetBps:
+          candidate.targetBps,
+
+        trailingDistanceBps:
+          candidate.trailingDistanceBps,
+
+        setup:
+          candidate.strategy,
+
+        signalId:
+          candidate.signalId,
+
+        entryScore:
+          candidate.entryScore,
+
+        predictionScore:
+          candidate.entryScore,
+
+        marketRegime:
+          candidate.regime,
+
+        entryConfidence:
+          candidate.confidence,
+
+        estimatedEntryCostBps:
+          candidate.estimatedRoundTripCostBps
+      });
+
+    return {
+      executed: true,
+      side: "BUY",
+      slotId,
+
+      amountUsd,
+      solReceived,
+      actualEntryPrice,
+
+      strategy:
+        candidate.strategy,
+
+      entryScore:
+        candidate.entryScore,
+
+      targetBps:
+        candidate.targetBps,
+
+      trailingDistanceBps:
+        candidate.trailingDistanceBps,
+
+      signature:
+        execution.signature,
+
+      position:
+        saved
+    };
+
+  } finally {
+    if (slotClaimed) {
+      await releaseSlot(
+        analysis.walletAddress,
+        slotId
+      );
+    }
+  }
+}
+
+
+// ======================================================
+// EXECUTE SELL
+// ======================================================
+
+async function executeApprovedSell({
+  req,
+  analysis,
+  candidate
+}) {
+  const position =
+    await getOpenPositionBySlot(
+      analysis.walletAddress,
+      candidate.slotId
+    );
+
+  if (!position) {
+    return {
+      executed: false,
+      side: "SELL",
+
+      slotId:
+        candidate.slotId,
+
+      reason:
+        "OPEN_POSITION_NOT_FOUND"
+    };
+  }
+
+  const amountSol =
+    num(position.entry_sol);
+
+  if (amountSol <= 0) {
+    throw new Error(
+      "INVALID_POSITION_SOL_AMOUNT"
+    );
+  }
+
+  const execution =
+    await executeTrade({
+      req,
+
+      side: "SELL",
+
+      slotId:
+        candidate.slotId,
+
+      amountSol,
+
+      slippageBps:
+        candidate.estimatedSlippageBps
+    });
+
+  if (
+    execution?.executed !== true
+  ) {
+    return {
+      executed: false,
+      side: "SELL",
+
+      slotId:
+        candidate.slotId,
+
+      reason:
+        execution?.reason ||
+        "SELL_NOT_EXECUTED",
+
+      execution
+    };
+  }
+
+  const usdcReceived =
+    atomicToAmount(
+      execution?.quote?.outAmount,
+      USDC_DECIMALS
+    );
+
+  if (usdcReceived <= 0) {
+    throw new Error(
+      "INVALID_USDC_RECEIVED"
+    );
+  }
+
+  const actualExitPrice =
+    usdcReceived /
+    amountSol;
+
+  const closed =
+    await closePosition({
+      id:
+        position.id,
+
+      exitPrice:
+        actualExitPrice,
+
+      exitUsdc:
+        usdcReceived,
+
+      signature:
+        execution.signature,
+
+      reason:
+        candidate.reason
+    });
+
+  return {
+    executed: true,
+
+    side: "SELL",
+
+    slotId:
+      candidate.slotId,
+
+    amountSol,
+    usdcReceived,
+    actualExitPrice,
+
+    grossPnlBps:
+      candidate.grossPnlBps,
+
+    targetBps:
+      candidate.targetBps,
+
+    protectionMode:
+      candidate.protectionMode,
+
+    reason:
+      candidate.reason,
+
+    realizedPnl:
+      num(
+        closed?.realized_pnl
+      ),
+
+    realizedPnlPct:
+      num(
+        closed?.realized_pnl_pct
+      ),
+
+    signature:
+      execution.signature,
+
+    position:
+      closed
+  };
+}
+
+
+// ======================================================
+// PUBLIC ANALYSIS
+// ======================================================
+
+function publicAnalysis(
+  analysis
+) {
+  return {
+    wallet:
+      analysis.walletSnapshot,
+
+    capital:
+      analysis.capital,
+
+    riskMode:
+      analysis.riskMode,
+
+    equityRisk:
+      analysis.equityRisk,
+
+    learning:
+      analysis.learning,
+
+    performance:
+      analysis.performance,
+
+    growthPlan:
+      analysis.growthPlan,
+
+    marketRegime:
+      analysis.regime,
+
+    strategies:
+      analysis.strategies,
+
+    signal: {
+      signalId:
+        analysis.signal.signalId ||
+        null,
+
+      action:
+        analysis.signal.action ||
+        "WAIT",
+
+      confidence:
+        num(
+          analysis.signal.confidence
+        ),
+
+      setup:
+        analysis.signal.setup ||
+        null,
+
+      currentPrice:
+        analysis.currentPrice,
+
+      marketMode:
+        analysis.signal.marketMode ||
+        null,
+
+      spreadBps:
+        num(
+          analysis.signal.spreadBps
+        ),
+
+      volatilityBps:
+        num(
+          analysis.signal.volatilityBps
+        ),
+
+      momentum1mBps:
+        num(
+          analysis.signal.momentum1mBps
+        ),
+
+      momentum3mBps:
+        num(
+          analysis.signal.momentum3mBps
+        ),
+
+      momentum5mBps:
+        analysis.signal.momentum5mBps ==
+        null
+          ? null
+          : num(
+              analysis.signal.momentum5mBps
+            ),
+
+      orderBookImbalance:
+        num(
+          analysis.signal.orderBookImbalance
+        ),
+
+      direction:
+        analysis.signal.direction ||
+        null
+    },
+
+    buyCandidate:
+      analysis.buyCandidate,
+
+    sellCandidates:
+      analysis.sellCandidates
+  };
+}
+
+
+// ======================================================
+// GET = ANALYSIS
+// ======================================================
+
+async function handleGet(
+  req,
+  res
+) {
+  try {
+    const analysis =
+      await analyzeSystem(req);
+
+    const dashboard =
+      await getTradingDashboard(
+        analysis.walletAddress
+      );
+
+    return res
+      .status(200)
+      .json({
+        status: "ok",
+
+        engine:
+          "FAWAZ_AI_TRADER_V8_GROWTH_PRO",
+
+        liveMarket: true,
+        realTrading: true,
+
+        execution:
+          "FULL_AUTO",
+
+        adaptiveStrategies: [
+          "DIP_RECOVERY",
+          "RANGE_MEAN_REVERSION",
+          "TREND_PULLBACK",
+          "CONTROLLED_BREAKOUT",
+          "SIGNAL_ASSISTED"
+        ],
+
+        ...publicAnalysis(
+          analysis
+        ),
+
+        dashboard,
+
+        timestamp:
+          new Date().toISOString()
+      });
+
+  } catch (error) {
+    console.error(
+      "V8 ANALYSIS ERROR:",
+      error
+    );
+
+    return res
+      .status(500)
+      .json({
+        status: "error",
+
+        engine:
+          "FAWAZ_AI_TRADER_V8_GROWTH_PRO",
+
+        executed: false,
+
+        message:
+          error?.message ||
+          "Analysis failed",
+
+        timestamp:
+          new Date().toISOString()
+      });
+  }
+}
+
+
+// ======================================================
+// POST = FULL AUTO CYCLE
+// ======================================================
+
+async function handlePost(
+  req,
+  res
+) {
+  const auth =
+    authorize(req);
+
+  if (!auth.ok) {
+    return res
+      .status(auth.status)
+      .json({
+        status: "error",
+        executed: false,
+        message: auth.reason
+      });
+  }
+
+  const walletAddress =
+    getWalletAddress();
+
+  let cycleLock =
+    null;
+
+  try {
+    cycleLock =
+      await acquireCycleLock(
+        walletAddress,
+        CONFIG.cycleLockSeconds
+      );
+
+    if (!cycleLock) {
+      return res
+        .status(200)
+        .json({
+          status: "busy",
+
+          engine:
+            "FAWAZ_AI_TRADER_V8_GROWTH_PRO",
+
+          executed: false,
+
+          reason:
+            "ANOTHER_TRADING_CYCLE_IS_RUNNING"
+        });
+    }
+
+    let analysis =
+      await analyzeSystem(req);
+
+    const results = [];
+
+    // ==================================================
+    // SELL FIRST
+    // ==================================================
+
+    const sells =
+      analysis.sellCandidates.slice(
+        0,
+        CONFIG.maxSellsPerCycle
+      );
+
+    for (
+      const candidate
+      of sells
+    ) {
+      try {
+        const result =
+          await executeApprovedSell({
+            req,
+            analysis,
+            candidate
+          });
+
+        results.push(result);
+
+      } catch (error) {
+        results.push({
+          executed: false,
+
+          side: "SELL",
+
+          slotId:
+            candidate.slotId,
+
+          reason:
+            error?.message ||
+            "SELL_FAILED"
+        });
+      }
+    }
+
+    // ==================================================
+    // REFRESH AFTER SELLS
+    // ==================================================
+
+    if (sells.length > 0) {
+      analysis =
+        await analyzeSystem(req);
+    }
+
+    // ==================================================
+    // ONE QUALITY BUY PER MARKET SNAPSHOT
+    // ==================================================
+
+    if (
+      analysis.buyCandidate
+        ?.approved === true
+    ) {
+      try {
+        const result =
+          await executeApprovedBuy({
+            req,
+            analysis
+          });
+
+        results.push(result);
+
+      } catch (error) {
+        results.push({
+          executed: false,
+
+          side: "BUY",
+
+          slotId:
+            analysis.buyCandidate
+              ?.slotId ||
+            null,
+
+          reason:
+            error?.message ||
+            "BUY_FAILED"
+        });
+      }
+    }
+
+    const executedCount =
+      results.filter(
+        item =>
+          item?.executed === true
+      ).length;
+
+    const dashboard =
+      await getTradingDashboard(
+        walletAddress
+      );
+
+    return res
+      .status(200)
+      .json({
+        status:
+          executedCount > 0
+            ? "ok"
+            : "waiting",
+
+        engine:
+          "FAWAZ_AI_TRADER_V8_GROWTH_PRO",
+
+        strategy:
+          "ADAPTIVE_GROWTH_MULTI_STRATEGY",
+
+        liveMarket: true,
+        realTrading: true,
+
+        execution:
+          "FULL_AUTO",
+
+        executed:
+          executedCount > 0,
+
+        executedCount,
+
+        results,
+
+        reason:
+          executedCount > 0
+            ? "CYCLE_EXECUTED"
+            : analysis.buyCandidate
+                ?.reason ||
+              "NO_APPROVED_TRADE",
+
+        ...publicAnalysis(
+          analysis
+        ),
+
+        dashboard,
+
+        timestamp:
+          new Date().toISOString()
+      });
+
+  } catch (error) {
+    console.error(
+      "V8 AUTO TRADING ERROR:",
+      error
+    );
+
+    return res
+      .status(500)
+      .json({
+        status: "error",
+
+        engine:
+          "FAWAZ_AI_TRADER_V8_GROWTH_PRO",
+
+        realTrading: true,
+
+        executed: false,
+
+        message:
+          error?.message ||
+          "Auto trading failed",
+
+        timestamp:
+          new Date().toISOString()
+      });
+
+  } finally {
+    if (cycleLock) {
+      try {
+        await releaseCycleLock(
+          walletAddress,
+          cycleLock.token
+        );
+      } catch (error) {
+        console.error(
+          "CYCLE LOCK RELEASE ERROR:",
+          error
+        );
+      }
+    }
+  }
+}
+
+
+// ======================================================
+// HANDLER
+// ======================================================
+
+export default async function handler(
+  req,
+  res
+) {
+  if (req.method === "GET") {
+    return handleGet(
+      req,
+      res
+    );
+  }
+
+  if (req.method === "POST") {
+    return handlePost(
+      req,
+      res
+    );
+  }
+
+  return res
+    .status(405)
+    .json({
+      status: "error",
+
+      engine:
+        "FAWAZ_AI_TRADER_V8_GROWTH_PRO",
+
+      message:
+        "GET or POST only"
+    });
+}
