@@ -1520,3 +1520,1074 @@ function getTargetAndTrailing(
       )
   };
 }
+
+
+// ======================================================
+// BUY CANDIDATE
+// ======================================================
+
+async function buildBuyCandidate({
+  walletAddress,
+  positions,
+  recentTrades,
+  signal,
+  capital,
+  learning,
+  regime,
+  growthPlan,
+  equityRisk,
+  performance
+}) {
+  if (
+    capital.remainingSlots <= 0
+  ) {
+    return {
+      approved: false,
+      reason: "MAX_OPEN_SLOTS_REACHED"
+    };
+  }
+
+  if (
+    capital.availableForTrading <= 0
+  ) {
+    return {
+      approved: false,
+      reason: "NO_AVAILABLE_TRADING_CAPITAL"
+    };
+  }
+
+  if (
+    num(equityRisk?.drawdownPct) >= 6
+  ) {
+    return {
+      approved: false,
+      reason: "DRAWDOWN_CIRCUIT_BREAKER"
+    };
+  }
+
+  if (
+    num(performance?.dailyLossPct) >= 4
+  ) {
+    return {
+      approved: false,
+      reason: "DAILY_LOSS_LIMIT"
+    };
+  }
+
+  const strategies =
+    buildStrategyScores(
+      signal,
+      regime,
+      learning,
+      growthPlan
+    );
+
+  const strategy =
+    strategies[0] || null;
+
+  if (!strategy) {
+    return {
+      approved: false,
+      reason: "NO_VALID_STRATEGY",
+      strategies
+    };
+  }
+
+  if (
+    strategy.score <
+    CONFIG.minimumEntryScore
+  ) {
+    return {
+      approved: false,
+      reason: "ENTRY_SCORE_TOO_LOW",
+      strategy,
+      strategies
+    };
+  }
+
+  if (
+    num(signal.spreadBps) >
+    CONFIG.maxSpreadBps
+  ) {
+    return {
+      approved: false,
+      reason: "SPREAD_TOO_HIGH",
+      strategy
+    };
+  }
+
+  if (
+    Math.abs(
+      num(signal.volatilityBps)
+    ) >
+    CONFIG.maxVolatilityBps
+  ) {
+    return {
+      approved: false,
+      reason: "VOLATILITY_TOO_HIGH",
+      strategy
+    };
+  }
+
+  if (
+    regime.regime === "STRONG_DOWN"
+  ) {
+    return {
+      approved: false,
+      reason: "STRONG_DOWN_PROTECTION",
+      strategy
+    };
+  }
+
+  const spacing =
+    evaluateEntrySpacing(
+      positions,
+      signal.currentPrice
+    );
+
+  if (!spacing.allowed) {
+    return {
+      approved: false,
+      reason: spacing.reason,
+      spacing,
+      strategy
+    };
+  }
+
+  if (
+    signal.signalId &&
+    await hasUsedEntrySignal({
+      walletAddress,
+      signalId:
+        String(signal.signalId)
+    })
+  ) {
+    return {
+      approved: false,
+      reason: "SIGNAL_ALREADY_USED",
+      strategy
+    };
+  }
+
+  const costs =
+    estimateExecutionCosts(signal);
+
+  const {
+    targetBps,
+    trailingDistanceBps
+  } =
+    getTargetAndTrailing(
+      strategy,
+      signal,
+      regime
+    );
+
+  const expectedNetEdgeBps =
+    targetBps -
+    costs.estimatedRoundTripCostBps;
+
+  if (
+    expectedNetEdgeBps <
+    CONFIG.minNetEdgeBps
+  ) {
+    return {
+      approved: false,
+      reason: "NET_EDGE_TOO_LOW",
+      strategy,
+      expectedNetEdgeBps:
+        round(expectedNetEdgeBps)
+    };
+  }
+
+  const size =
+    calculateDynamicPositionSize({
+      totalCapitalUsd:
+        capital.total,
+
+      availableCapitalUsd:
+        capital.availableForTrading,
+
+      openExposureUsd:
+        capital.usedInPositions,
+
+      entryScore:
+        strategy.score,
+
+      strategyName:
+        strategy.name,
+
+      marketRegime:
+        regime.regime,
+
+      performance,
+      equityRisk,
+      growthPlan,
+
+      config: {
+        baseAllocationPct:
+          CONFIG.baseAllocationPct,
+
+        strongAllocationPct:
+          CONFIG.strongAllocationPct,
+
+        eliteAllocationPct:
+          CONFIG.eliteAllocationPct,
+
+        maxSingleSlotPct:
+          CONFIG.maxSingleSlotPct,
+
+        maxCapitalUsagePct:
+          CONFIG.maxCapitalUsagePct,
+
+        minTradeUsd:
+          CONFIG.minTradeUsd,
+
+        lowCapitalTestThresholdUsd:
+          CONFIG.lowCapitalTestThresholdUsd
+      }
+    });
+
+  if (
+    !size ||
+    num(size.amountUsd) <= 0
+  ) {
+    return {
+      approved: false,
+      reason:
+        size?.reason ||
+        "POSITION_SIZE_ZERO",
+      size,
+      strategy
+    };
+  }
+
+  const freeSlot =
+    await getFreeSlot(
+      walletAddress,
+      CONFIG.maxOpenSlots
+    );
+
+  if (
+    freeSlot == null
+  ) {
+    return {
+      approved: false,
+      reason: "NO_FREE_SLOT"
+    };
+  }
+
+  const state = {
+    totalCapitalUsd:
+      capital.total,
+
+    recentTrades,
+
+    slots:
+      positions.map(
+        position => ({
+          id:
+            position.slot_id,
+
+          status:
+            "OPEN",
+
+          amountUsd:
+            num(position.entry_usdc)
+        })
+      ),
+
+    drawdownPct:
+      num(equityRisk?.drawdownPct),
+
+    dailyLossPct:
+      num(performance?.dailyLossPct)
+  };
+
+  const risk =
+    evaluateRisk({
+      state,
+
+      candidate: {
+        amountUsd:
+          size.amountUsd,
+
+        expectedMoveBps:
+          targetBps,
+
+        buyFeeBps: 0,
+        sellFeeBps: 0,
+
+        estimatedSlippageBps:
+          costs.estimatedSlippageBps
+      },
+
+      config: {
+        maxOpenSlots:
+          CONFIG.maxOpenSlots,
+
+        maxCapitalUsage:
+          CONFIG.maxCapitalUsagePct,
+
+        maxSlippageBps:
+          CONFIG.maxSlippageBps,
+
+        minNetEdgeBps:
+          CONFIG.minNetEdgeBps,
+
+        maxSingleSlotPct:
+          CONFIG.maxSingleSlotPct
+      }
+    });
+
+  if (
+    !risk.allowed
+  ) {
+    return {
+      approved: false,
+      reason: risk.reason,
+      risk,
+      strategy,
+      size
+    };
+  }
+
+  return {
+    approved: true,
+
+    candidateId:
+      crypto.randomUUID(),
+
+    side: "BUY",
+
+    slotId:
+      freeSlot,
+
+    signalId:
+      signal.signalId || null,
+
+    strategy:
+      strategy.name,
+
+    entryScore:
+      strategy.score,
+
+    expectedSwingBps:
+      strategy.expectedSwingBps,
+
+    evidence:
+      strategy.evidence,
+
+    amountUsd:
+      round(
+        size.amountUsd,
+        6
+      ),
+
+    positionSizing:
+      size,
+
+    targetBps,
+
+    trailingDistanceBps,
+
+    estimatedSlippageBps:
+      costs.estimatedSlippageBps,
+
+    estimatedRoundTripCostBps:
+      costs.estimatedRoundTripCostBps,
+
+    expectedNetEdgeBps:
+      round(expectedNetEdgeBps),
+
+    regime:
+      regime.regime,
+
+    confidence:
+      num(signal.confidence),
+
+    createdAt:
+      new Date().toISOString()
+  };
+}
+
+
+// ======================================================
+// SELL CANDIDATES
+// ======================================================
+
+async function buildSellCandidates({
+  positions,
+  currentPrice,
+  signal
+}) {
+  const candidates = [];
+
+  const costs =
+    estimateExecutionCosts(signal);
+
+  const m1 =
+    num(signal.momentum1mBps);
+
+  const m3 =
+    num(signal.momentum3mBps);
+
+  const direction =
+    String(
+      signal.direction || ""
+    ).toUpperCase();
+
+  for (
+    const position
+    of positions
+  ) {
+    const entryPrice =
+      num(position.entry_price);
+
+    if (
+      entryPrice <= 0
+    ) {
+      continue;
+    }
+
+    const grossPnlBps =
+      pctBps(
+        currentPrice,
+        entryPrice
+      );
+
+    const oldHigh =
+      Math.max(
+        entryPrice,
+        num(
+          position.highest_price,
+          entryPrice
+        )
+      );
+
+    const highestPrice =
+      Math.max(
+        oldHigh,
+        currentPrice
+      );
+
+    const highestPnlBps =
+      pctBps(
+        highestPrice,
+        entryPrice
+      );
+
+    const previousMfe =
+      num(
+        position
+          .max_favorable_excursion_bps,
+        0
+      );
+
+    const previousMae =
+      num(
+        position
+          .max_adverse_excursion_bps,
+        0
+      );
+
+    const mfeBps =
+      Math.max(
+        previousMfe,
+        highestPnlBps
+      );
+
+    const maeBps =
+      Math.min(
+        previousMae,
+        grossPnlBps
+      );
+
+    await updatePositionTelemetry({
+      id:
+        position.id,
+
+      highestPrice,
+
+      maxFavorableExcursionBps:
+        mfeBps,
+
+      maxAdverseExcursionBps:
+        maeBps
+    });
+
+    const targetBps =
+      Math.max(
+        CONFIG.targetMinBps,
+
+        num(
+          position.target_bps,
+          CONFIG.targetMinBps
+        )
+      );
+
+    const trailingDistanceBps =
+      clamp(
+        num(
+          position
+            .trailing_distance_bps,
+          targetBps * 0.28
+        ),
+
+        CONFIG.trailingMinBps,
+
+        CONFIG.trailingMaxBps
+      );
+
+    let trailingActive =
+      position.trailing_active === true;
+
+    if (
+      !trailingActive &&
+      grossPnlBps >= targetBps
+    ) {
+      await activateTrailing({
+        id:
+          position.id,
+
+        highestPrice
+      });
+
+      trailingActive = true;
+    }
+
+    let reason = null;
+
+    let protectionMode =
+      "HOLD";
+
+    if (
+      trailingActive
+    ) {
+      const retracementBps =
+        pctBps(
+          currentPrice,
+          highestPrice
+        );
+
+      const lockedNetProfitBps =
+        grossPnlBps -
+        costs.estimatedSellCostBps;
+
+      if (
+        retracementBps <=
+          -trailingDistanceBps &&
+        lockedNetProfitBps >=
+          CONFIG.minLockedProfitBps
+      ) {
+        reason =
+          "TRAILING_PROFIT_EXIT";
+
+        protectionMode =
+          "PROFIT_LOCK";
+      }
+
+      const extendedTarget =
+        targetBps *
+        CONFIG.extendedProfitMultiple;
+
+      if (
+        !reason &&
+        grossPnlBps >=
+          extendedTarget
+      ) {
+        reason =
+          "EXTENDED_PROFIT_EXIT";
+
+        protectionMode =
+          "EXTENDED_TAKE_PROFIT";
+      }
+    }
+
+    const absoluteEmergency =
+      grossPnlBps <=
+      -CONFIG.absoluteEmergencyLossBps;
+
+    const emergencyLoss =
+      grossPnlBps <=
+      -CONFIG.emergencyLossBps;
+
+    const momentumBreakdown =
+      m1 <=
+        CONFIG.emergencyMomentum1mBps &&
+      m3 <=
+        CONFIG.emergencyMomentum3mBps;
+
+    const directionBreakdown =
+      direction.includes("DOWN") ||
+      direction.includes("BEAR");
+
+    if (
+      absoluteEmergency
+    ) {
+      reason =
+        "ABSOLUTE_EMERGENCY_EXIT";
+
+      protectionMode =
+        "EMERGENCY";
+
+    } else if (
+      !reason &&
+      emergencyLoss &&
+      momentumBreakdown &&
+      directionBreakdown
+    ) {
+      reason =
+        "CONFIRMED_EMERGENCY_EXIT";
+
+      protectionMode =
+        "EMERGENCY";
+    }
+
+    if (!reason) {
+      continue;
+    }
+
+    candidates.push({
+      candidateId:
+        crypto.randomUUID(),
+
+      side: "SELL",
+
+      slotId:
+        Number(position.slot_id),
+
+      positionId:
+        Number(position.id),
+
+      amountSol:
+        num(position.entry_sol),
+
+      entryPrice,
+
+      currentPrice,
+
+      highestPrice,
+
+      grossPnlBps:
+        round(grossPnlBps),
+
+      highestPnlBps:
+        round(highestPnlBps),
+
+      estimatedSellCostBps:
+        costs.estimatedSellCostBps,
+
+      estimatedSlippageBps:
+        costs.estimatedSlippageBps,
+
+      trailingActive,
+
+      trailingDistanceBps:
+        round(
+          trailingDistanceBps
+        ),
+
+      targetBps:
+        round(targetBps),
+
+      protectionMode,
+
+      reason,
+
+      createdAt:
+        new Date().toISOString()
+    });
+  }
+
+  const priority = {
+    ABSOLUTE_EMERGENCY_EXIT: 1,
+    CONFIRMED_EMERGENCY_EXIT: 2,
+    TRAILING_PROFIT_EXIT: 3,
+    EXTENDED_PROFIT_EXIT: 4
+  };
+
+  candidates.sort(
+    (a, b) => {
+      const pa =
+        priority[a.reason] || 99;
+
+      const pb =
+        priority[b.reason] || 99;
+
+      if (pa !== pb) {
+        return pa - pb;
+      }
+
+      return (
+        b.grossPnlBps -
+        a.grossPnlBps
+      );
+    }
+  );
+
+  return candidates;
+}
+
+
+// ======================================================
+// ANALYZE SYSTEM
+// ======================================================
+
+async function analyzeSystem(
+  req
+) {
+  const walletAddress =
+    getWalletAddress();
+
+  const [
+    signalData,
+    walletSnapshot
+  ] =
+    await Promise.all([
+      loadSignal(req),
+      loadWalletSnapshot(req)
+    ]);
+
+  if (
+    String(
+      walletSnapshot.walletAddress
+    ) !==
+    String(walletAddress)
+  ) {
+    throw new Error(
+      "WALLET_SNAPSHOT_ADDRESS_MISMATCH"
+    );
+  }
+
+  const signal =
+    mergeMarketFields(
+      signalData
+    );
+
+  const currentPrice =
+    num(signal.currentPrice);
+
+  if (
+    currentPrice <= 0
+  ) {
+    throw new Error(
+      "INVALID_CURRENT_PRICE"
+    );
+  }
+
+  signal.currentPrice =
+    currentPrice;
+
+  const [
+    positions,
+    recentTrades,
+    dashboard
+  ] =
+    await Promise.all([
+      getOpenPositions(
+        walletAddress
+      ),
+
+      getRecentClosedTrades(
+        walletAddress,
+        100
+      ),
+
+      getTradingDashboard(
+        walletAddress
+      )
+    ]);
+
+  const capital =
+    calculateCapital({
+      positions,
+      walletSnapshot,
+      currentPrice
+    });
+
+  await recordEquitySnapshot({
+    walletAddress,
+
+    equityUsd:
+      capital.total,
+
+    usdcBalance:
+      walletSnapshot.usdcBalance,
+
+    solBalance:
+      walletSnapshot.solBalance,
+
+    solPrice:
+      currentPrice
+  });
+
+  const [
+    equityRisk,
+    performance
+  ] =
+    await Promise.all([
+      getEquityRiskSnapshot(
+        walletAddress
+      ),
+
+      getPerformanceStats(
+        walletAddress
+      )
+    ]);
+
+  const riskMode =
+    getDynamicRiskMode(
+      recentTrades
+    );
+
+  const learning =
+    buildLearningProfile(
+      recentTrades
+    );
+
+  const regime =
+    detectMarketRegime(
+      signal
+    );
+
+  const growthPlan =
+    buildGrowthPlan(
+      equityRisk,
+      performance
+    );
+
+  const strategies =
+    buildStrategyScores(
+      signal,
+      regime,
+      learning,
+      growthPlan
+    );
+
+  const buyCandidate =
+    await buildBuyCandidate({
+      walletAddress,
+      positions,
+      recentTrades,
+      signal,
+      capital,
+      learning,
+      regime,
+      growthPlan,
+      equityRisk,
+      performance
+    });
+
+  const sellCandidates =
+    await buildSellCandidates({
+      positions,
+      currentPrice,
+      signal
+    });
+
+  return {
+    walletAddress,
+    walletSnapshot,
+    signal,
+    currentPrice,
+    positions,
+    recentTrades,
+    dashboard,
+    capital,
+    riskMode,
+    learning,
+    regime,
+    growthPlan,
+    equityRisk,
+    performance,
+    strategies,
+    buyCandidate,
+    sellCandidates
+  };
+}
+
+
+// ======================================================
+// EXECUTE BUY
+// ======================================================
+
+async function executeApprovedBuy({
+  req,
+  analysis
+}) {
+  const candidate =
+    analysis.buyCandidate;
+
+  if (
+    !candidate ||
+    candidate.approved !== true
+  ) {
+    throw new Error(
+      "NO_APPROVED_BUY_CANDIDATE"
+    );
+  }
+
+  const slotId =
+    Number(candidate.slotId);
+
+  const claimToken =
+    crypto.randomUUID();
+
+  let slotClaimed = false;
+
+  try {
+    const claim =
+      await claimSlot({
+        walletAddress:
+          analysis.walletAddress,
+
+        slotId,
+
+        claimToken,
+
+        ttlSeconds:
+          CONFIG.cycleLockSeconds
+      });
+
+    if (
+      !claim?.acquired
+    ) {
+      return {
+        executed: false,
+        side: "BUY",
+        slotId,
+        reason:
+          "SLOT_CLAIM_FAILED"
+      };
+    }
+
+    slotClaimed = true;
+
+    const existing =
+      await getOpenPositionBySlot(
+        analysis.walletAddress,
+        slotId
+      );
+
+    if (existing) {
+      return {
+        executed: false,
+        side: "BUY",
+        slotId,
+        reason:
+          "SLOT_ALREADY_OPEN"
+      };
+    }
+
+    const freshWallet =
+      await loadWalletSnapshot(
+        req
+      );
+
+    const amountUsd =
+      Math.min(
+        num(candidate.amountUsd),
+        num(
+          freshWallet.usdcBalance
+        )
+      );
+
+    if (
+      amountUsd <
+      CONFIG.minTradeUsd &&
+      !analysis.capital.testMode
+    ) {
+      return {
+        executed: false,
+        side: "BUY",
+        slotId,
+        reason:
+          "INSUFFICIENT_REAL_USDC"
+      };
+    }
+
+    if (
+      amountUsd <= 0
+    ) {
+      return {
+        executed: false,
+        side: "BUY",
+        slotId,
+        reason:
+          "ZERO_BUY_AMOUNT"
+      };
+    }
+
+    const execution =
+      await executeTrade({
+        req,
+
+        side: "BUY",
+
+        slotId,
+
+        amountUsd,
+
+        slippageBps:
+          candidate
+            .estimatedSlippageBps
+      });
+
+    if (
+      execution?.executed !== true
+    ) {
+      return {
+        executed: false,
+        side: "BUY",
+        slotId,
+
+        reason:
+          execution?.reason ||
+          "BUY_NOT_EXECUTED",
+
+        execution
+      };
+    }
+
+    const solReceived =
+      atomicToAmount(
+        execution?.quote?.outAmount,
+        SOL_DECIMALS
+      );
+
+    if (
+      solReceived <= 0
+    ) {
+      throw new Error(
+        "INVALID_SOL_RECEIVED"
+      );
+    }
+
+    const actualEntryPrice =
+      amountUsd /
+      solReceived;
+
+    const saved =
+      await openPosition({
+        walletAddress:
+          analysis.walletAddress,
+
+        slotId,
+
+        entryPrice:
+          actualEntryPrice,
+
+        entrySol:
+          solReceived,
+
+        entryUsdc:
+          amountUsd,
+
+        signature:
+          execution.signature,
+
+        strategy:
+          `V8_${candidate.strategy}`,
+
+        targetBps:
+          candidate.target
